@@ -9,5 +9,8 @@ __pycache__/
 *.log
 *.tmp
 
+# Ignorar archivos de configuración
+.env
+
 # Archivos de salida
 salidas/
