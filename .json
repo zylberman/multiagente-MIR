@@ -1,0 +1,4 @@
+# Archivos de entrada y salida
+archivo_preguntas = "salidas/preguntas_separadas.txt"  # Archivo de entrada
+archivo_salida = "salidas/preguntas_con_imagen.txt"    # Archivo de salida
+archivo_log_errores = "salidas/log_errores.txt"        # Archivo de log de errores

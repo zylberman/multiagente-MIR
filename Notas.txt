@@ -1,0 +1,5 @@
+Corregir errores como al procesar las imagenes:
+-1
+MIR12.2425.16
+
+La primera página de la que se extraen las imagenes debe ser en la primera pagina posterior a la última pregunta 210.

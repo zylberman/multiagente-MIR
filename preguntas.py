@@ -1,13 +1,17 @@
 import os
 import re
 import pdfplumber
+from dotenv import load_dotenv
 
-# Configuración
-PDF_PATH = "pdfs/MIR.12.2425.01.pdf"  # Ruta del PDF de entrada
-OUTPUT_DIR = "salidas/imagenes"  # Carpeta para guardar las imágenes
-OUTPUT_FILE = "salidas/preguntas_separadas.txt"  # Archivo final con las preguntas separadas
-START_PAGE_QUESTIONS = 3  # Página inicial de las preguntas
-END_PAGE_QUESTIONS = 14  # Páginas finales reservadas para imágenes
+# Cargar las variables desde el archivo .env
+load_dotenv("config.env")
+
+# Configuración desde el archivo .env
+PDF_PATH = os.getenv("PDF_PATH")
+OUTPUT_DIR = os.getenv("OUTPUT_DIR")
+OUTPUT_FILE = os.getenv("OUTPUT_FILE")
+START_PAGE_QUESTIONS = int(os.getenv("START_PAGE_QUESTIONS", 3))  # Valor por defecto 3
+END_PAGE_QUESTIONS = int(os.getenv("END_PAGE_QUESTIONS", 14))  # Valor por defecto 14
 
 def extraer_preguntas(pdf_path, start_page_questions, end_page_questions):
     """
