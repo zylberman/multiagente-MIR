@@ -14,3 +14,6 @@ __pycache__/
 
 # Archivos de salida
 salidas/
+
+# No ignorar config.env
+!config.env
