@@ -17,3 +17,6 @@ salidas/
 
 # No ignorar config.env
 !config.env
+
+# Notas de proyecto
+Notas.txt
