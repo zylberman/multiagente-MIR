@@ -21,3 +21,6 @@ salidas/
 
 # Notas de proyecto
 Notas.txt
+
+# Archivos de la visión y analisis de imagenes
+agente_openai_con_imagenes.py
