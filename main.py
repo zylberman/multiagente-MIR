@@ -3,48 +3,39 @@
 from dataclasses import dataclass
 from http import client
 from groq import Groq
-import datetime
-import textwrap
 from http import client
 import os
 import re
+import json
 from preguntas import obtener_preguntas_imagenes
 from openai import OpenAI
+from langgraph.graph import Graph
 from dotenv import load_dotenv
+from langgraph.graph import END, StateGraph, START 
 
 PDF_PATH = os.getenv("PDF_PATH")
 ARCHIVO_PREGUNTAS = os.getenv("ARCHIVO_PREGUNTAS")
 role = "system"
 
-# Definir el contenido del sistema
-content = textwrap.dedent("""
-Eres un experto en la resolución de examenes MIR (España), médico con amplia experiencia. Recibirás una pregunta con varias opciones y deberás devolver la respuesta en formato JSON **estricto y válido**, siguiendo esta estructura:
+# Cargar prompts desde un archivo JSON
+def load_prompts(json_path="prompts.json"):
+    with open(json_path, "r", encoding="utf-8") as file:
+        return json.load(file)
 
-{
-  "pregunta": "Texto exacto de la pregunta.",
-  "opciones": {
-    "Opción 1": "Explicación detallada de por qué es correcta o incorrecta.",
-    "Opción 2": "Explicación detallada de por qué es correcta o incorrecta.",
-    "Opción 3": "Explicación detallada de por qué es correcta o incorrecta.",
-    "Opción 4": "Explicación detallada de por qué es correcta o incorrecta.",
-    ...
-  },
-  "respuesta_correcta": "Texto exacto de la opción correcta"
-}
-
-### **Instrucciones importantes**:
-1. **Cada opción debe incluir una justificación** clara, precisa y fundamentada en evidencia médica.
-2. **Solo una opción puede ser la respuesta correcta**, asegurando que `"respuesta_correcta"` coincida con una de las opciones listadas.
-3. **El formato JSON debe ser válido y sin errores sintácticos**, asegurando que se pueda interpretar sin fallos.
-4. **Debe respetar la terminología médica** y evitar respuestas ambiguas o incorrectas.
-""")
+# Cargar los prompts en una variable global
+PROMPTS = load_prompts()
 
 # Configurar el cliente de Groq
 load_dotenv()  # Esto carga las variables de entorno desde el .env
 client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
+@dataclass
+class AgentState:
+    query: str
+    response: str = ""
+    status: str = "pending"
 
-def chat_with_groq(content, prompt):
+def chat_with_groq(prompt_system, prompt_user):
     """
     Envía un prompt a Groq y obtiene la respuesta en formato JSON.
     """
@@ -52,12 +43,11 @@ def chat_with_groq(content, prompt):
         chat_completion = client.chat.completions.create(
             messages=[
                 {
-                    "role": "system",
-                    "content": content
-                },
+                    "role": "system", 
+                    "content": prompt_system}, 
                 {
                     "role": "user",
-                    "content": prompt,
+                    "content": prompt_user,
                 }
             ],
             model="llama-3.3-70b-versatile",  # Asegúrate de que este modelo esté disponible
@@ -106,16 +96,81 @@ def separar_preguntas(archivo_entrada, inicio=30, fin=35):
     return preguntas_filtradas
 
 # Función para imprimir preguntas
-def imprimir_preguntas(preguntas):
-    """
-    Imprime cada pregunta en pantalla.
-    :param preguntas: Lista de preguntas en texto.
-    """
-    for i, pregunta in enumerate(preguntas): # Iterar sobre las preguntas
-        print(f"\nProcesando pregunta {i}...")
-        print(f"\n{pregunta}")
-        print(f"\n{chat_with_groq(content, pregunta)}")
-        print("-" * 50)  # Separador para mayor claridad
+def expert_bot(state: AgentState):
+    """El experto responde la pregunta y actualiza el estado."""
+    response = chat_with_groq(PROMPTS["expert"], state.query)
+    return AgentState(query=state.query, response=json.dumps(response), status="pending")
+
+def revisor_bot(state: AgentState):
+    """El revisor evalúa la respuesta y actualiza el estado."""
+    review = chat_with_groq(PROMPTS["revisor"], state.response)
+    print(f"Este es el resultado de revisor_bot: {review}")
+
+    try:
+        review_json = json.loads(review)  # Convertir respuesta de string a JSON
+    except json.JSONDecodeError:
+        return AgentState(query=state.query, response=json.dumps({"error": "Respuesta inválida del revisor"}), status="fail")
+
+    # Comparar la respuesta generada con la respuesta del experto
+    expert_response = json.loads(state.response)  # La respuesta del experto
+    errores = []
+
+    if expert_response.get("respuesta_correcta") != review_json.get("respuesta_correcta"):
+        errores.append("La respuesta correcta identificada por el revisor no coincide con la respuesta del experto.")
+
+    if review_json.get("errores_detectados"):
+        errores.extend(review_json.get("errores_detectados"))
+
+    status = "error" if errores else "ok"
+    review_json["errores_detectados"] = errores  # Agregar errores detectados
+
+    # Si ya ha fallado más de 2 veces, marcar como fallo definitivo
+    if state.status == "error":
+        status = "fail"
+
+    return AgentState(query=state.query, response=json.dumps(review_json), status=status)
+
+
+def revisión_extra(state: AgentState):
+    """Si hay errores, el experto vuelve a revisar la pregunta."""
+    print(f"Este es el resultado de una nueva revisión: {state.response}")
+    
+    # Si ya se ha revisado más de una vez, detener el ciclo
+    if "error" in state.status:
+        return AgentState(query=state.query, response=json.dumps({"error": "Revisión fallida después de múltiples intentos"}), status="fail")
+    
+    new_review = chat_with_groq(PROMPTS["expert"], state.query)
+    
+    try:
+        new_review_json = json.loads(new_review)  # Convertir la respuesta a JSON si es necesario
+        status = "pending"  # Asumimos que necesita otra revisión
+    except json.JSONDecodeError:
+        new_review_json = {"error": "Respuesta inválida en revisión extra"}
+        status = "fail"
+
+    return AgentState(query=state.query, response=json.dumps(new_review_json), status=status)
+
+
+
+# Definir el flujo de trabajo antes de agregar nodos
+workflow = StateGraph(AgentState)
+
+# Definir nodos
+workflow.add_node("expert", expert_bot)
+workflow.add_node("revisor", revisor_bot)
+workflow.add_node("revisión_extra", revisión_extra)
+workflow.add_node("end", lambda state: state)  # Nodo final
+
+# Definir punto de entrada
+workflow.set_entry_point("expert")
+
+# Definir transiciones condicionales
+workflow.add_edge("expert", "revisor")
+workflow.add_conditional_edges("revisor", lambda state: "revisión_extra" if state.status == "error" else "end")
+workflow.add_conditional_edges("revisión_extra", lambda state: "revisor" if state.status == "pending" else "end")
+
+# Compilar el flujo
+graph = workflow.compile()
 
 if __name__ == "__main__":
     #obtener_preguntas()
@@ -123,8 +178,17 @@ if __name__ == "__main__":
     archivo_preguntas = ARCHIVO_PREGUNTAS  # Asegúrate de que el archivo existe y tiene contenido
     preguntas_seleccionadas = separar_preguntas(archivo_preguntas, 30, 35)
 
-    # Imprimir las preguntas seleccionadas
-    imprimir_preguntas(preguntas_seleccionadas)
+    for i, pregunta in enumerate(preguntas_seleccionadas): # Iterar sobre las preguntas
+        print(f"\nProcesando pregunta {i}...")
+        print(f"\n{pregunta}")
+        print("-" * 50)  # Separador para mayor claridad
+        initial_state = AgentState(query=pregunta)
+        result = graph.invoke(initial_state)
+        print(result)
+
+        
+
+
 
 
 

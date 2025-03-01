@@ -24,3 +24,6 @@ Notas.txt
 
 # Archivos de la visión y analisis de imagenes
 agente_openai_con_imagenes.py
+
+# Clave de google_vision_api
+miria.json
