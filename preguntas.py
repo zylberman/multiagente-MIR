@@ -93,6 +93,11 @@ def procesar_preguntas_y_separar(preguntas, output_file):
     """
     Procesa y separa preguntas con opciones en un archivo final.
     """
+    # Crear el directorio si no existe
+    output_dir = os.path.dirname(output_file)
+    if output_dir and not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+        
     preguntas_completas = "\n".join(preguntas)
 
     patron_pregunta = re.compile(
@@ -153,27 +158,29 @@ def extraer_imagenes(pdf_path, output_dir, start_page_images):
     print(f"Imágenes extraídas correctamente. Guardadas en: {output_dir}")
     return imagenes_extraidas
 
-
-if __name__ == "__main__":
+def obtener_preguntas_imagenes(pdf_path):
     # Verificar si el archivo PDF existe
-    if not os.path.exists(PDF_PATH):
-        print(f"Error: El archivo PDF no existe: {PDF_PATH}")
+    if not os.path.exists(pdf_path):
+        print(f"Error: El archivo PDF no existe: {pdf_path}")
     else:
-        print(f"Procesando el archivo PDF: {PDF_PATH}")
+        print(f"Procesando el archivo PDF: {pdf_path}")
         try:
             # Determinar la página donde terminan las preguntas
-            END_PAGE_QUESTIONS = determinar_pagina_final_preguntas(PDF_PATH, START_PAGE_QUESTIONS) + 1
+            END_PAGE_QUESTIONS = determinar_pagina_final_preguntas(pdf_path, START_PAGE_QUESTIONS) + 1
             
             # Extraer preguntas del PDF
-            preguntas = extraer_preguntas(PDF_PATH, START_PAGE_QUESTIONS, END_PAGE_QUESTIONS)
+            preguntas = extraer_preguntas(pdf_path, START_PAGE_QUESTIONS, END_PAGE_QUESTIONS)
             
             # Procesar y separar preguntas
             procesar_preguntas_y_separar(preguntas, OUTPUT_FILE)
             
             # Extraer imágenes del PDF
-            extraer_imagenes(PDF_PATH, OUTPUT_DIR, END_PAGE_QUESTIONS)
+            extraer_imagenes(pdf_path, OUTPUT_DIR, END_PAGE_QUESTIONS)
 
             print("Proceso completado correctamente. Todas las preguntas e imágenes fueron extraídas con éxito.")
 
         except ValueError as e:
             print(f"Error durante el procesamiento: {e}")
+
+if __name__ == "__main__":
+    obtener_preguntas_imagenes(PDF_PATH)
