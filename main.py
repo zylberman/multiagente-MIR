@@ -42,28 +42,36 @@ def chat_with_groq(prompt_system, prompt_user):
     try:
         chat_completion = client.chat.completions.create(
             messages=[
-                {
-                    "role": "system", 
-                    "content": prompt_system}, 
-                {
-                    "role": "user",
-                    "content": prompt_user,
-                }
+                {"role": "system", "content": prompt_system}, 
+                {"role": "user", "content": prompt_user}
             ],
-            model="llama-3.3-70b-versatile",  # Asegúrate de que este modelo esté disponible
+            model="llama-3.3-70b-versatile",  
         )
 
-        # ✅ Acceder al contenido de la respuesta correctamente
         respuesta_texto = chat_completion.choices[0].message.content  
-        return respuesta_texto
+        
+        # Intentar convertir la respuesta a JSON
+        try:
+            respuesta_json = json.loads(respuesta_texto)
+            return json.dumps(respuesta_json, ensure_ascii=False, indent=4)
+        except json.JSONDecodeError:
+            return json.dumps({
+                "error": "La respuesta del modelo no es JSON válido.",
+                "raw_response": respuesta_texto
+            }, ensure_ascii=False, indent=4)
 
     except Exception as e:
-        return {"error": str(e)}
+        return json.dumps({
+            "error": f"Error al comunicarse con Groq: {str(e)}"
+        }, ensure_ascii=False, indent=4)
+
+
+
 
 def obtener_preguntas():
     obtener_preguntas_imagenes(PDF_PATH)
 
-def separar_preguntas(archivo_entrada, inicio=30, fin=35):
+def separar_preguntas(archivo_entrada, inicio=30, fin=31):
     """
     Extrae un rango específico de preguntas desde un archivo de texto.
     
@@ -95,79 +103,141 @@ def separar_preguntas(archivo_entrada, inicio=30, fin=35):
 
     return preguntas_filtradas
 
-# Función para imprimir preguntas
+# Función para Expert
 def expert_bot(state: AgentState):
     """El experto responde la pregunta y actualiza el estado."""
-    response = chat_with_groq(PROMPTS["expert"], state.query)
-    return AgentState(query=state.query, response=json.dumps(response), status="pending")
-
-def revisor_bot(state: AgentState):
-    """El revisor evalúa la respuesta y actualiza el estado."""
-    review = chat_with_groq(PROMPTS["revisor"], state.response)
-    print(f"Este es el resultado de revisor_bot: {review}")
-
+    print("\nConsultando al experto...\n")
+    response_text = chat_with_groq(PROMPTS["expert"], state.query)   
+    print(f"Respuesta del experto: {response_text}")
     try:
-        review_json = json.loads(review)  # Convertir respuesta de string a JSON
+        response_json = json.loads(response_text)  # Convertimos a JSON
+        status = response_json.get("status", "error")  # Si no hay status, asumimos error
     except json.JSONDecodeError:
-        return AgentState(query=state.query, response=json.dumps({"error": "Respuesta inválida del revisor"}), status="fail")
+        response_json = {"error": "Respuesta inválida del expert"}
+        status = "error"
 
-    # Comparar la respuesta generada con la respuesta del experto
-    expert_response = json.loads(state.response)  # La respuesta del experto
+    return AgentState(query=state.query, response=json.dumps(response_json), status=status)
+
+# Función para Revisor
+def revisor_bot(state: AgentState):
+    print("\n🔎 Consultando al REVISOR...\n")
+    
+    # El revisor responde la pregunta de forma independiente
+    review_text = chat_with_groq(PROMPTS["revisor"], state.query)
+    print(f"🔹 Respuesta del revisor (texto crudo): {review_text}")
+
+    # Intentar convertir la respuesta del revisor en JSON
+    try:
+        review_json = json.loads(review_text)
+        status = review_json.get("status", "ok")
+    except json.JSONDecodeError:
+        review_json = {
+            "error": "❌ Respuesta del revisor no es JSON válido.",
+            "raw_response": review_text
+        }
+        return AgentState(
+            query=state.query,
+            response=json.dumps(review_json, ensure_ascii=False, indent=4),
+            status="fail"
+        )
+
+    # Verificar si el experto dio una respuesta válida antes de compararlas
+    try:
+        expert_response = json.loads(state.response)
+    except json.JSONDecodeError:
+        expert_response = {"error": "❌ Respuesta inválida del experto. No es JSON válido."}
+        review_json["errores_detectados"] = ["⚠️ Error: La respuesta del experto no es válida para comparar."]
+        return AgentState(
+            query=state.query,
+            response=json.dumps(review_json, ensure_ascii=False, indent=4),
+            status="error"
+        )
+
     errores = []
 
-    if expert_response.get("respuesta_correcta") != review_json.get("respuesta_correcta"):
-        errores.append("La respuesta correcta identificada por el revisor no coincide con la respuesta del experto.")
+    # Comparar la respuesta del revisor con la del experto
+    if (
+        "respuesta_correcta" in expert_response
+        and "respuesta_correcta" in review_json
+        and expert_response["respuesta_correcta"] != review_json["respuesta_correcta"]
+    ):
+        errores.append("⚠️ Discrepancia: La respuesta del revisor NO coincide con la del experto.")
 
+    # Si el revisor detectó errores en la pregunta, los agregamos a la lista de errores
     if review_json.get("errores_detectados"):
-        errores.extend(review_json.get("errores_detectados"))
+        errores.extend(review_json["errores_detectados"])
 
-    status = "error" if errores else "ok"
-    review_json["errores_detectados"] = errores  # Agregar errores detectados
+    # Si hay errores o discrepancias, se envía la respuesta al auditor
+    if errores:
+        review_json["errores_detectados"] = errores
+        status = "error"  # Se requiere auditoría
+    else:
+        status = "ok"  # No se requiere auditoría
 
-    # Si ya ha fallado más de 2 veces, marcar como fallo definitivo
-    if state.status == "error":
-        status = "fail"
+    return AgentState(
+        query=state.query,
+        response=json.dumps(review_json, ensure_ascii=False, indent=4),
+        status=status
+    )
 
-    return AgentState(query=state.query, response=json.dumps(review_json), status=status)
 
+# Función para Auditor
+def auditor_bot(state: AgentState):
+    print("\n🔎 Consultando al AUDITOR...\n")
 
-def revisión_extra(state: AgentState):
-    """Si hay errores, el experto vuelve a revisar la pregunta."""
-    print(f"Este es el resultado de una nueva revisión: {state.response}")
-    
-    # Si ya se ha revisado más de una vez, detener el ciclo
-    if "error" in state.status:
-        return AgentState(query=state.query, response=json.dumps({"error": "Revisión fallida después de múltiples intentos"}), status="fail")
-    
-    new_review = chat_with_groq(PROMPTS["expert"], state.query)
-    
+    # Verificar si la respuesta del revisor es un JSON válido antes de enviarlo
     try:
-        new_review_json = json.loads(new_review)  # Convertir la respuesta a JSON si es necesario
-        status = "pending"  # Asumimos que necesita otra revisión
+        revisor_response = json.loads(state.response)
     except json.JSONDecodeError:
-        new_review_json = {"error": "Respuesta inválida en revisión extra"}
+        return AgentState(
+            query=state.query,
+            response=json.dumps({"error": "❌ Respuesta inválida del revisor. No es JSON válido."}, ensure_ascii=False, indent=4),
+            status="fail"
+        )
+
+    auditor_input = {
+        "pregunta": state.query,
+        "errores_reportados": revisor_response.get("errores_detectados", []),
+        "respuesta_correcta_revisor": revisor_response.get("respuesta_correcta", ""),
+        "respuesta_correcta_experto": json.loads(state.response).get("respuesta_correcta", ""),
+        "evaluación_error": revisor_response.get("evaluación_error", "indeterminado"),
+    }
+
+    audit_text = chat_with_groq(PROMPTS["auditor"], json.dumps(auditor_input, ensure_ascii=False, indent=4))
+    print(f"🔹 Respuesta del auditor: {audit_text}")
+
+    try:
+        audit_json = json.loads(audit_text)
+        status = audit_json.get("status", "ok")  # ✅ Cambiado de "fail" a "ok" por defecto
+    except json.JSONDecodeError:
+        audit_json = {"error": "❌ Respuesta inválida en auditoría", "raw_response": audit_text}
         status = "fail"
 
-    return AgentState(query=state.query, response=json.dumps(new_review_json), status=status)
+    return AgentState(
+        query=state.query,
+        response=json.dumps(audit_json, ensure_ascii=False, indent=4),
+        status=status
+    )
 
 
 
-# Definir el flujo de trabajo antes de agregar nodos
+
+# Definir el flujo de trabajo en LangGraph
 workflow = StateGraph(AgentState)
 
 # Definir nodos
 workflow.add_node("expert", expert_bot)
 workflow.add_node("revisor", revisor_bot)
-workflow.add_node("revisión_extra", revisión_extra)
-workflow.add_node("end", lambda state: state)  # Nodo final
+workflow.add_node("auditor", auditor_bot)
+workflow.add_node("end", lambda state: state)
 
 # Definir punto de entrada
 workflow.set_entry_point("expert")
 
-# Definir transiciones condicionales
+# Transiciones condicionales
 workflow.add_edge("expert", "revisor")
-workflow.add_conditional_edges("revisor", lambda state: "revisión_extra" if state.status == "error" else "end")
-workflow.add_conditional_edges("revisión_extra", lambda state: "revisor" if state.status == "pending" else "end")
+workflow.add_conditional_edges("revisor", lambda state: "auditor" if state.status == "error" else "end")
+workflow.add_conditional_edges("auditor", lambda state: "end")
 
 # Compilar el flujo
 graph = workflow.compile()
@@ -176,7 +246,7 @@ if __name__ == "__main__":
     #obtener_preguntas()
     # Uso de la función
     archivo_preguntas = ARCHIVO_PREGUNTAS  # Asegúrate de que el archivo existe y tiene contenido
-    preguntas_seleccionadas = separar_preguntas(archivo_preguntas, 30, 35)
+    preguntas_seleccionadas = separar_preguntas(archivo_preguntas, 30, 31)
 
     for i, pregunta in enumerate(preguntas_seleccionadas): # Iterar sobre las preguntas
         print(f"\nProcesando pregunta {i}...")
@@ -185,50 +255,3 @@ if __name__ == "__main__":
         initial_state = AgentState(query=pregunta)
         result = graph.invoke(initial_state)
         print(result)
-
-        
-
-
-
-
-
-''''
-@dataclass
-class AgentState:
-    query: str
-    date: datetime 
-    response: str
-
-# Definir edges y flujo de control
-workflow.add_edge(START, "validate")
-workflow.add_edge("summary", END)
-
-# Añadimos los nodos definidos al grafo de estados
-workflow.add_node("validate", validar_activo)
-workflow.add_node("search", buscar_noticias)
-workflow.add_node("analyze", analizar_noticias)
-workflow.add_node("summary", resumir_sentimiento)
-
-workflow.add_edge("validate", "search")
-# Reemplazar la arista que iba de "search" -> "evaluate" a "search" -> "analyze"
-workflow.add_edge("search", "analyze")
-# Conectar "analyze" -> "summary"
-workflow.add_edge("analyze", "summary")
-
-
-# Condición: si la validación es exitosa, pasa a "search", de lo contrario, se queda en "validate"
-workflow.add_conditional_edges("validate", lambda state: "search" if state.response == "valid" else "END")
-
-# Compilar el grafo
-graph = workflow.compile()
-
-# ----------
-# Ejecución del flujo
-# ----------
-def obtener_sentimiento(query: str, date: str) -> dict:
-    # Inicializar el estado del agente
-    initial_state = AgentState(query=query, date=date, response="")
-
-    # Ejecutar el flujo
-    result = graph.invoke(initial_state)
-'''
