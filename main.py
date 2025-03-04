@@ -12,6 +12,8 @@ from openai import OpenAI
 from langgraph.graph import Graph
 from dotenv import load_dotenv
 from langgraph.graph import END, StateGraph, START 
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import HumanMessage
 import time
 
 PDF_PATH = os.getenv("PDF_PATH")
@@ -29,6 +31,15 @@ PROMPTS = load_prompts()
 # Configurar el cliente de Groq
 load_dotenv()  # Esto carga las variables de entorno desde el .env
 client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+
+# Configuración de dos modelos de lenguaje que se ejecutan en local a través de LM Studio.
+# openai_api_base indica la dirección base del servidor donde corre el modelo
+# openai_api_key se usa para autenticar (aquí es un valor ficticio porque se está usando LM Studio local)
+llm_qwen = ChatOpenAI(
+    openai_api_base="http://localhost:1234/v1",  
+    openai_api_key="lm-studio",  
+    model_name="qwen2.5-7b-instruct-1m"
+)
 
 @dataclass
 class AgentState:
@@ -64,7 +75,6 @@ def chat_with_groq(prompt_system, prompt_user, max_retries=3, delay=10):
     - Mejora el manejo de errores de JSON.
     """
     retries = 0
-
     while retries < max_retries:
         try:
             chat_completion = client.chat.completions.create(
@@ -74,44 +84,58 @@ def chat_with_groq(prompt_system, prompt_user, max_retries=3, delay=10):
                 ],
                 model="llama-3.3-70b-versatile",  
             )
-            respuesta_texto = chat_completion.choices[0].message.content  
-
-            # Eliminar posibles bloques de código Markdown (` ```json ... ``` `)
-            respuesta_texto_clean = re.sub(r"```json|```", "", respuesta_texto).strip()
-
-            # Intentar convertir la respuesta a JSON limpio
-            try:
-                respuesta_json = json.loads(respuesta_texto_clean)
-                return json.dumps(respuesta_json, ensure_ascii=False, indent=4)
-            except json.JSONDecodeError:
-                log_error("❌ La respuesta del modelo no es JSON válido.")
-                print(respuesta_texto_clean)
-                return json.dumps({
-                    "error": "La respuesta del modelo no es JSON válido.",
-                    "raw_response": respuesta_texto_clean
-                }, ensure_ascii=False, indent=4)
+            return json.dumps(clean_json_response(chat_completion.choices[0].message.content), ensure_ascii=False, indent=4)
 
         except Exception as e:
             error_message = str(e)
-
-            # Detectar si el error es por 'rate_limit_exceeded'
             if "rate_limit_exceeded" in error_message:
-                log_error(f"🚨 Límite de tokens alcanzado. Reintentando en {delay} segundos... ({retries+1}/{max_retries})")
-                print(f"error_message: {error_message}")
-                time.sleep(delay)  # Esperar antes de reintentar
+                print(f"🚨 Límite de tokens alcanzado. Reintentando en {delay} segundos... ({retries+1}/{max_retries})")
+                time.sleep(delay)
                 retries += 1
-                continue  # Intentar de nuevo
+                continue  
 
-            # Cualquier otro error se muestra de inmediato
-            log_error(f"❌ Error al comunicarse con Groq: {error_message}")
-            return json.dumps({
-                "error": f"Error al comunicarse con Groq: {error_message}"
-            }, ensure_ascii=False, indent=4)
+            return json.dumps({"error": f"Error al comunicarse con Groq: {error_message}"}, ensure_ascii=False, indent=4)
 
-    # Si se alcanzó el máximo de reintentos
-    log_error("🚨 Se alcanzó el límite de reintentos. No se pudo completar la consulta.")
-    return json.dumps({"error": "Límite de reintentos alcanzado. Inténtalo más tarde."}, ensure_ascii=False, indent=4)
+# 🔹 Función para interactuar con Qwen con los mismos parámetros que chat_with_groq
+from langchain_core.messages import SystemMessage, HumanMessage
+from langgraph.graph import StateGraph, MessagesState, START
 
+def chat_with_qwen(prompt_system, prompt_user, max_retries=3, delay=10):
+    """
+    Envía un prompt a Qwen y obtiene la respuesta en formato JSON.
+    - Implementa reintento automático en caso de error.
+    - Maneja la limpieza de la respuesta JSON.
+    """
+    retries = 0
+    messages = [
+        SystemMessage(content=prompt_system),
+        HumanMessage(content=prompt_user)
+    ]
+
+    while retries < max_retries:
+        try:
+            response = llm_qwen.invoke(messages)
+            response_content = response.content
+            return json.dumps(clean_json_response(response_content), ensure_ascii=False, indent=4)
+
+        except Exception as e:
+            error_message = str(e)
+            print(f"❌ Error al comunicarse con Qwen: {error_message}")
+            print(f"🚨 Reintentando en {delay} segundos... ({retries + 1}/{max_retries})")
+            time.sleep(delay)
+            retries += 1
+
+    return json.dumps({"error": "Límite de reintentos alcanzado."}, ensure_ascii=False, indent=4)
+
+
+# 🔹 Función para limpiar bloques de código Markdown (evita duplicación)
+def clean_json_response(response_text):
+    """Elimina bloques de código Markdown y devuelve JSON limpio."""
+    response_text_clean = re.sub(r"```json|```", "", response_text).strip()
+    try:
+        return json.loads(response_text_clean)
+    except json.JSONDecodeError:
+        return {"error": "La respuesta no es un JSON válido.", "raw_response": response_text_clean}
 
 def obtener_preguntas():
     obtener_preguntas_imagenes(PDF_PATH)
@@ -148,30 +172,38 @@ def separar_preguntas(archivo_entrada, inicio=30, fin=31):
 
     return preguntas_filtradas
 
+
 # Función para Expert
-def expert_bot(state: AgentState) -> AgentState:
-    """El experto responde la pregunta y actualiza el estado."""
+# 🔹 Función para consultar al modelo de lenguaje
+def expert_bot(state: AgentState, model="qwen") -> AgentState:
+    """El experto responde la pregunta usando Groq o Qwen y actualiza el estado."""
     log_section("🧑‍🏫 CONSULTANDO AL EXPERTO")
-    response_text = chat_with_groq(json.dumps(PROMPTS["expert"], ensure_ascii=False, indent=4), state.query)
+
+    prompt_system = json.dumps(PROMPTS["expert"], ensure_ascii=False, indent=4)
     
+    if model == "groq":
+        response_text = chat_with_groq(prompt_system, state.query)
+    elif model == "qwen":
+        response_text = chat_with_qwen(prompt_system, state.query)
+    else:
+        return AgentState(query=state.query, response=json.dumps({"error": "Modelo no reconocido"}), status="error")
+
     try:
-        # Eliminar posibles backticks ``` que rodean el JSON
-        response_text_clean = re.sub(r"```json|```", "", response_text).strip()
-        response_json = json.loads(response_text_clean)  # Convertir a JSON
+        response_json = clean_json_response(response_text)
         status = response_json.get("status", "error")  # Si no hay status, asumimos error
-    except json.JSONDecodeError:
-        response_json = {"error": "Respuesta inválida del expert"}
+    except Exception as e:
+        response_json = {"error": f"Respuesta inválida del modelo: {str(e)}"}
         status = "error"
 
-    return AgentState(query=state.query, response=json.dumps(response_json), status=status)
+    return AgentState(query=state.query, response=json.dumps(response_json, ensure_ascii=False, indent=4), status=status)
 
 
-# Función para Revisor
-def revisor_bot(state: AgentState) -> AgentState:
+# Función para Revisor con selección de modelo
+def revisor_bot(state: AgentState, model="groq") -> AgentState:
     """El revisor revisa la respuesta del experto y actualiza el estado."""
     log_section("🧐 CONSULTANDO AL REVISOR")
 
-    # Asegurarse de que la respuesta del experto es un diccionario válido
+    # Asegurar que la respuesta del experto es un diccionario válido
     if isinstance(state.response, str):
         try:
             state.response = json.loads(state.response)
@@ -183,13 +215,19 @@ def revisor_bot(state: AgentState) -> AgentState:
         "respuesta_experto": state.response.get("respuesta_correcta", "No disponible"),
         "errores_detectados_experto": state.response.get("error_detectado", "Ninguno"),
     }
-    # Pasar `revisor_input` como string JSON válido a `chat_with_groq()`
-    response_text = chat_with_groq(json.dumps(PROMPTS["revisor"], ensure_ascii=False, indent=4), json.dumps(revisor_input, ensure_ascii=False))
+
+    prompt_system = json.dumps(PROMPTS["revisor"], ensure_ascii=False, indent=4)
+    prompt_user = json.dumps(revisor_input, ensure_ascii=False)
+
+    if model == "groq":
+        response_text = chat_with_groq(prompt_system, prompt_user)
+    elif model == "qwen":
+        response_text = chat_with_qwen(prompt_system, prompt_user)
+    else:
+        return AgentState(query=state.query, response=json.dumps({"error": "Modelo no reconocido"}), status="error")
 
     try:
-        # LIMPIAR posibles bloque de código ```json ... ```
-        response_text_clean = re.sub(r"```json|```", "", response_text).strip()
-        response_json = json.loads(response_text_clean)  # Convertimos a JSON
+        response_json = clean_json_response(response_text)
         status = response_json.get("status", "error")  # Si no hay status, asumimos error
     except json.JSONDecodeError:
         response_json = {"error": "Respuesta inválida del revisor"}
@@ -198,10 +236,11 @@ def revisor_bot(state: AgentState) -> AgentState:
     return AgentState(query=state.query, response=json.dumps(response_json, ensure_ascii=False), status=status)
 
 
-# Función para Auditor
-def auditor_bot(state: AgentState) -> AgentState:
+# Función para Auditor con selección de modelo
+def auditor_bot(state: AgentState, model="groq") -> AgentState:
     """El auditor revisa la pregunta y valida la respuesta."""
     log_section("🔍 CONSULTANDO AL AUDITOR")
+
     # Asegurar que la respuesta del revisor es un diccionario válido
     if isinstance(state.response, str):
         try:
@@ -217,18 +256,25 @@ def auditor_bot(state: AgentState) -> AgentState:
         "errores_detectados_revisor": state.response.get("errores_detectados", []),
     }
 
-    response_text = chat_with_groq(json.dumps(PROMPTS["auditor"], ensure_ascii=False, indent=4), json.dumps(auditor_input, ensure_ascii=False))
+    prompt_system = json.dumps(PROMPTS["auditor"], ensure_ascii=False, indent=4)
+    prompt_user = json.dumps(auditor_input, ensure_ascii=False)
+
+    if model == "groq":
+        response_text = chat_with_groq(prompt_system, prompt_user)
+    elif model == "qwen":
+        response_text = chat_with_qwen(prompt_system, prompt_user)
+    else:
+        return AgentState(query=state.query, response=json.dumps({"error": "Modelo no reconocido"}), status="error")
 
     try:
-        # LIMPIAR posibles bloques de código ```json ... ```
-        response_text_clean = re.sub(r"```json|```", "", response_text).strip()
-        response_json = json.loads(response_text_clean)  # Convertimos a JSON
+        response_json = clean_json_response(response_text)
         status = response_json.get("status", "error")  # Si no hay status, asumimos error
     except json.JSONDecodeError:
         response_json = {"error": "Respuesta inválida del auditor"}
         status = "error"
 
     return AgentState(query=state.query, response=json.dumps(response_json, ensure_ascii=False), status=status)
+
 
 
 
