@@ -12,6 +12,7 @@ from openai import OpenAI
 from langgraph.graph import Graph
 from dotenv import load_dotenv
 from langgraph.graph import END, StateGraph, START 
+import time
 
 PDF_PATH = os.getenv("PDF_PATH")
 ARCHIVO_PREGUNTAS = os.getenv("ARCHIVO_PREGUNTAS")
@@ -35,37 +36,81 @@ class AgentState:
     response: str = ""
     status: str = "pending"
 
-def chat_with_groq(prompt_system, prompt_user):
+# 🔹 Función para imprimir secciones con formato mejorado
+def log_section(title):
+    """Imprime un título en la consola con un formato claro."""
+    print("\n\033[94m" + "=" * 70 + "\033[0m")  # Azul
+    print(f"\033[1;36m🔹 {title.upper()} 🔹\033[0m")  # Cyan Negrita
+    print("\033[94m" + "=" * 70 + "\033[0m")
+
+# 🔹 Función para mostrar errores en rojo con más detalle
+def log_error(msg):
+    print(f"\033[91m🚨 ERROR: {msg}\033[0m")
+
+# 🔹 Función para mostrar el resultado final de cada pregunta
+def log_final_result(status, respuesta_correcta):
+    print("\n\033[92m✅ RESULTADO FINAL 🔎\033[0m")  # Verde
+    if status == "ok":
+        print("\033[1;32m✔ Pregunta validada correctamente 🎯\033[0m")  # Verde Negrita
+        print(f"\033[1;36m🔹 Respuesta correcta: {respuesta_correcta}\033[0m")
+    else:
+        print("\033[1;31m❌ Se requiere revisión ⚠\033[0m")  # Rojo Negrita
+    print("=" * 70)
+
+def chat_with_groq(prompt_system, prompt_user, max_retries=3, delay=10):
     """
     Envía un prompt a Groq y obtiene la respuesta en formato JSON.
+    - Implementa reintento automático en caso de 'rate_limit_exceeded'.
+    - Mejora el manejo de errores de JSON.
     """
-    try:
-        chat_completion = client.chat.completions.create(
-            messages=[
-                {"role": "system", "content": prompt_system}, 
-                {"role": "user", "content": prompt_user}
-            ],
-            model="llama-3.3-70b-versatile",  
-        )
+    retries = 0
 
-        respuesta_texto = chat_completion.choices[0].message.content  
-        
-        # Intentar convertir la respuesta a JSON
+    while retries < max_retries:
         try:
-            respuesta_json = json.loads(respuesta_texto)
-            return json.dumps(respuesta_json, ensure_ascii=False, indent=4)
-        except json.JSONDecodeError:
+            chat_completion = client.chat.completions.create(
+                messages=[
+                    {"role": "system", "content": prompt_system}, 
+                    {"role": "user", "content": prompt_user}
+                ],
+                model="llama-3.3-70b-versatile",  
+            )
+            respuesta_texto = chat_completion.choices[0].message.content  
+
+            # Eliminar posibles bloques de código Markdown (` ```json ... ``` `)
+            respuesta_texto_clean = re.sub(r"```json|```", "", respuesta_texto).strip()
+
+            # Intentar convertir la respuesta a JSON limpio
+            try:
+                respuesta_json = json.loads(respuesta_texto_clean)
+                return json.dumps(respuesta_json, ensure_ascii=False, indent=4)
+            except json.JSONDecodeError:
+                log_error("❌ La respuesta del modelo no es JSON válido.")
+                print(respuesta_texto_clean)
+                return json.dumps({
+                    "error": "La respuesta del modelo no es JSON válido.",
+                    "raw_response": respuesta_texto_clean
+                }, ensure_ascii=False, indent=4)
+
+        except Exception as e:
+            error_message = str(e)
+
+            # Detectar si el error es por 'rate_limit_exceeded'
+            if "rate_limit_exceeded" in error_message:
+                log_error(f"🚨 Límite de tokens alcanzado. Reintentando en {delay} segundos... ({retries+1}/{max_retries})")
+                print(f"error_message: {error_message}")
+                time.sleep(delay)  # Esperar antes de reintentar
+                retries += 1
+                continue  # Intentar de nuevo
+
+            # Cualquier otro error se muestra de inmediato
+            log_error(f"❌ Error al comunicarse con Groq: {error_message}")
             return json.dumps({
-                "error": "La respuesta del modelo no es JSON válido.",
-                "raw_response": respuesta_texto
+                "error": f"Error al comunicarse con Groq: {error_message}"
             }, ensure_ascii=False, indent=4)
 
-    except Exception as e:
-        return json.dumps({
-            "error": f"Error al comunicarse con Groq: {str(e)}"
-        }, ensure_ascii=False, indent=4)
-
-
+    # Si se alcanzó el máximo de reintentos
+    log_error("🚨 Se alcanzó el límite de reintentos. No se pudo completar la consulta.")
+    return json.dumps({"error": "Límite de reintentos alcanzado. Inténtalo más tarde."}, ensure_ascii=False, indent=4)
 
 
 def obtener_preguntas():
@@ -104,13 +149,15 @@ def separar_preguntas(archivo_entrada, inicio=30, fin=31):
     return preguntas_filtradas
 
 # Función para Expert
-def expert_bot(state: AgentState):
+def expert_bot(state: AgentState) -> AgentState:
     """El experto responde la pregunta y actualiza el estado."""
-    print("\nConsultando al experto...\n")
-    response_text = chat_with_groq(PROMPTS["expert"], state.query)   
-    print(f"Respuesta del experto: {response_text}")
+    log_section("🧑‍🏫 CONSULTANDO AL EXPERTO")
+    response_text = chat_with_groq(json.dumps(PROMPTS["expert"], ensure_ascii=False, indent=4), state.query)
+    
     try:
-        response_json = json.loads(response_text)  # Convertimos a JSON
+        # Eliminar posibles backticks ``` que rodean el JSON
+        response_text_clean = re.sub(r"```json|```", "", response_text).strip()
+        response_json = json.loads(response_text_clean)  # Convertir a JSON
         status = response_json.get("status", "error")  # Si no hay status, asumimos error
     except json.JSONDecodeError:
         response_json = {"error": "Respuesta inválida del expert"}
@@ -118,107 +165,70 @@ def expert_bot(state: AgentState):
 
     return AgentState(query=state.query, response=json.dumps(response_json), status=status)
 
+
 # Función para Revisor
-def revisor_bot(state: AgentState):
-    print("\n🔎 Consultando al REVISOR...\n")
-    
-    # El revisor responde la pregunta de forma independiente
-    review_text = chat_with_groq(PROMPTS["revisor"], state.query)
-    print(f"🔹 Respuesta del revisor (texto crudo): {review_text}")
+def revisor_bot(state: AgentState) -> AgentState:
+    """El revisor revisa la respuesta del experto y actualiza el estado."""
+    log_section("🧐 CONSULTANDO AL REVISOR")
 
-    # Intentar convertir la respuesta del revisor en JSON
+    # Asegurarse de que la respuesta del experto es un diccionario válido
+    if isinstance(state.response, str):
+        try:
+            state.response = json.loads(state.response)
+        except json.JSONDecodeError:
+            state.response = {"error": "Respuesta inválida del experto"}
+
+    revisor_input = {
+        "pregunta": state.query,
+        "respuesta_experto": state.response.get("respuesta_correcta", "No disponible"),
+        "errores_detectados_experto": state.response.get("error_detectado", "Ninguno"),
+    }
+    # Pasar `revisor_input` como string JSON válido a `chat_with_groq()`
+    response_text = chat_with_groq(json.dumps(PROMPTS["revisor"], ensure_ascii=False, indent=4), json.dumps(revisor_input, ensure_ascii=False))
+
     try:
-        review_json = json.loads(review_text)
-        status = review_json.get("status", "ok")
+        # LIMPIAR posibles bloque de código ```json ... ```
+        response_text_clean = re.sub(r"```json|```", "", response_text).strip()
+        response_json = json.loads(response_text_clean)  # Convertimos a JSON
+        status = response_json.get("status", "error")  # Si no hay status, asumimos error
     except json.JSONDecodeError:
-        review_json = {
-            "error": "❌ Respuesta del revisor no es JSON válido.",
-            "raw_response": review_text
-        }
-        return AgentState(
-            query=state.query,
-            response=json.dumps(review_json, ensure_ascii=False, indent=4),
-            status="fail"
-        )
+        response_json = {"error": "Respuesta inválida del revisor"}
+        status = "error"
 
-    # Verificar si el experto dio una respuesta válida antes de compararlas
-    try:
-        expert_response = json.loads(state.response)
-    except json.JSONDecodeError:
-        expert_response = {"error": "❌ Respuesta inválida del experto. No es JSON válido."}
-        review_json["errores_detectados"] = ["⚠️ Error: La respuesta del experto no es válida para comparar."]
-        return AgentState(
-            query=state.query,
-            response=json.dumps(review_json, ensure_ascii=False, indent=4),
-            status="error"
-        )
-
-    errores = []
-
-    # Comparar la respuesta del revisor con la del experto
-    if (
-        "respuesta_correcta" in expert_response
-        and "respuesta_correcta" in review_json
-        and expert_response["respuesta_correcta"] != review_json["respuesta_correcta"]
-    ):
-        errores.append("⚠️ Discrepancia: La respuesta del revisor NO coincide con la del experto.")
-
-    # Si el revisor detectó errores en la pregunta, los agregamos a la lista de errores
-    if review_json.get("errores_detectados"):
-        errores.extend(review_json["errores_detectados"])
-
-    # Si hay errores o discrepancias, se envía la respuesta al auditor
-    if errores:
-        review_json["errores_detectados"] = errores
-        status = "error"  # Se requiere auditoría
-    else:
-        status = "ok"  # No se requiere auditoría
-
-    return AgentState(
-        query=state.query,
-        response=json.dumps(review_json, ensure_ascii=False, indent=4),
-        status=status
-    )
+    return AgentState(query=state.query, response=json.dumps(response_json, ensure_ascii=False), status=status)
 
 
 # Función para Auditor
-def auditor_bot(state: AgentState):
-    print("\n🔎 Consultando al AUDITOR...\n")
-
-    # Verificar si la respuesta del revisor es un JSON válido antes de enviarlo
-    try:
-        revisor_response = json.loads(state.response)
-    except json.JSONDecodeError:
-        return AgentState(
-            query=state.query,
-            response=json.dumps({"error": "❌ Respuesta inválida del revisor. No es JSON válido."}, ensure_ascii=False, indent=4),
-            status="fail"
-        )
+def auditor_bot(state: AgentState) -> AgentState:
+    """El auditor revisa la pregunta y valida la respuesta."""
+    log_section("🔍 CONSULTANDO AL AUDITOR")
+    # Asegurar que la respuesta del revisor es un diccionario válido
+    if isinstance(state.response, str):
+        try:
+            state.response = json.loads(state.response)
+        except json.JSONDecodeError:
+            state.response = {"error": "Respuesta inválida del revisor"}
 
     auditor_input = {
         "pregunta": state.query,
-        "errores_reportados": revisor_response.get("errores_detectados", []),
-        "respuesta_correcta_revisor": revisor_response.get("respuesta_correcta", ""),
-        "respuesta_correcta_experto": json.loads(state.response).get("respuesta_correcta", ""),
-        "evaluación_error": revisor_response.get("evaluación_error", "indeterminado"),
+        "respuesta_experto": state.response.get("respuesta_correcta", "No disponible"),
+        "errores_detectados_experto": state.response.get("error_detectado", "Ninguno"),
+        "respuesta_revisor": state.response.get("respuesta_correcta", "No disponible"),
+        "errores_detectados_revisor": state.response.get("errores_detectados", []),
     }
 
-    audit_text = chat_with_groq(PROMPTS["auditor"], json.dumps(auditor_input, ensure_ascii=False, indent=4))
-    print(f"🔹 Respuesta del auditor: {audit_text}")
+    response_text = chat_with_groq(json.dumps(PROMPTS["auditor"], ensure_ascii=False, indent=4), json.dumps(auditor_input, ensure_ascii=False))
 
     try:
-        audit_json = json.loads(audit_text)
-        status = audit_json.get("status", "ok")  # ✅ Cambiado de "fail" a "ok" por defecto
+        # LIMPIAR posibles bloques de código ```json ... ```
+        response_text_clean = re.sub(r"```json|```", "", response_text).strip()
+        response_json = json.loads(response_text_clean)  # Convertimos a JSON
+        status = response_json.get("status", "error")  # Si no hay status, asumimos error
     except json.JSONDecodeError:
-        audit_json = {"error": "❌ Respuesta inválida en auditoría", "raw_response": audit_text}
-        status = "fail"
+        response_json = {"error": "Respuesta inválida del auditor"}
+        status = "error"
 
-    return AgentState(
-        query=state.query,
-        response=json.dumps(audit_json, ensure_ascii=False, indent=4),
-        status=status
-    )
-
+    return AgentState(query=state.query, response=json.dumps(response_json, ensure_ascii=False), status=status)
 
 
 
@@ -249,9 +259,21 @@ if __name__ == "__main__":
     preguntas_seleccionadas = separar_preguntas(archivo_preguntas, 30, 31)
 
     for i, pregunta in enumerate(preguntas_seleccionadas): # Iterar sobre las preguntas
-        print(f"\nProcesando pregunta {i}...")
-        print(f"\n{pregunta}")
-        print("-" * 50)  # Separador para mayor claridad
+        log_section(f"📌 Procesando pregunta {i+1}")
+        print(f"\n{pregunta}\n" + "-" * 60)
+
         initial_state = AgentState(query=pregunta)
         result = graph.invoke(initial_state)
-        print(result)
+
+        # 🔹 CORRECCIÓN: Acceder a response correctamente
+        try:
+            final_status = json.loads(result["response"]).get("status", "error")
+            respuesta_correcta = json.loads(result["response"]).get("respuesta_correcta", "No disponible")
+        except json.JSONDecodeError:
+            log_error("❌ Error al interpretar la respuesta JSON del flujo.")
+            final_status = "error"
+            respuesta_correcta = "No disponible"
+
+        log_final_result(final_status, respuesta_correcta)
+
+
