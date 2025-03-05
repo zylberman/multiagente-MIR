@@ -14,6 +14,9 @@ from dotenv import load_dotenv
 from langgraph.graph import END, StateGraph, START 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage
+# 🔹 Función para interactuar con Qwen con los mismos parámetros que chat_with_groq
+from langchain_core.messages import SystemMessage, HumanMessage
+from langgraph.graph import StateGraph, MessagesState, START
 import time
 
 PDF_PATH = os.getenv("PDF_PATH")
@@ -39,6 +42,12 @@ llm_qwen = ChatOpenAI(
     openai_api_base="http://localhost:1234/v1",  
     openai_api_key="lm-studio",  
     model_name="qwen2.5-7b-instruct-1m"
+)
+
+llm_dseek = ChatOpenAI(
+    openai_api_base="http://localhost:1234/v1",  
+    openai_api_key="lm-studio",  
+    model_name="deepseek-r1-distill-llama-8b"
 )
 
 @dataclass
@@ -68,6 +77,7 @@ def log_final_result(status, respuesta_correcta):
         print("\033[1;31m❌ Se requiere revisión ⚠\033[0m")  # Rojo Negrita
     print("=" * 70)
 
+# 🔹 Función para elegir el modelo adecuado y realizar la consulta
 def chat_with_groq(prompt_system, prompt_user, max_retries=3, delay=10):
     """
     Envía un prompt a Groq y obtiene la respuesta en formato JSON.
@@ -96,10 +106,6 @@ def chat_with_groq(prompt_system, prompt_user, max_retries=3, delay=10):
 
             return json.dumps({"error": f"Error al comunicarse con Groq: {error_message}"}, ensure_ascii=False, indent=4)
 
-# 🔹 Función para interactuar con Qwen con los mismos parámetros que chat_with_groq
-from langchain_core.messages import SystemMessage, HumanMessage
-from langgraph.graph import StateGraph, MessagesState, START
-
 def chat_with_qwen(prompt_system, prompt_user, max_retries=3, delay=10):
     """
     Envía un prompt a Qwen y obtiene la respuesta en formato JSON.
@@ -127,15 +133,88 @@ def chat_with_qwen(prompt_system, prompt_user, max_retries=3, delay=10):
 
     return json.dumps({"error": "Límite de reintentos alcanzado."}, ensure_ascii=False, indent=4)
 
+def chat_with_dseek(prompt_system, prompt_user, max_retries=3, delay=10):
+    """
+    Envía un prompt a DeepSeek y obtiene la respuesta en formato JSON.
+    - Implementa reintento automático en caso de error.
+    - Asegura que la respuesta incluya 'respuesta_correcta'.
+    """
+    retries = 0
+    messages = [
+        SystemMessage(content=prompt_system),
+        HumanMessage(content=prompt_user)
+    ]
+
+    while retries < max_retries:
+        try:
+            response = llm_dseek.invoke(messages)
+            
+            if not response or not response.content:
+                raise ValueError("❌ Respuesta vacía del modelo.")
+
+            response_content = response.content.strip()  # Elimina espacios innecesarios
+            
+            print(f"🔍 RESPUESTA CRUDA DE DEEPSEEK:\n{response_content}")  # Debug: Ver la respuesta real
+
+            # Buscar si la respuesta contiene un JSON dentro de texto largo
+            response_json = clean_json_response(response_content)
+
+            # Intentar extraer 'respuesta_correcta' si no está presente
+            if not response_json.get("respuesta_correcta"):
+                print("⚠ El modelo no devolvió 'respuesta_correcta'. Intentando extraer de nuevo...")
+
+                match = re.search(r'"respuesta_correcta"\s*:\s*"([^"]+)"', response_content)
+                if match:
+                    response_json["respuesta_correcta"] = match.group(1)
+                else:
+                    response_json["respuesta_correcta"] = "No disponible"
+
+            return json.dumps(response_json, ensure_ascii=False, indent=4)
+
+        except Exception as e:
+            error_message = str(e)
+            print(f"❌ Error al comunicarse con DeepSeek: {error_message}")
+            print(f"🚨 Reintentando en {delay} segundos... ({retries + 1}/{max_retries})")
+            time.sleep(delay)
+            retries += 1
+
+    return json.dumps({"error": "Límite de reintentos alcanzado o respuesta vacía."}, ensure_ascii=False, indent=4)
+
 
 # 🔹 Función para limpiar bloques de código Markdown (evita duplicación)
+import json
+import re
+
+import json
+import re
+
 def clean_json_response(response_text):
-    """Elimina bloques de código Markdown y devuelve JSON limpio."""
-    response_text_clean = re.sub(r"```json|```", "", response_text).strip()
+    """Limpia el JSON eliminando bloques Markdown y asegurando que la respuesta sea válida."""
+    
+    # Eliminar bloques de código Markdown
+    response_text_clean = re.sub(r"```json|```", "", response_text, flags=re.MULTILINE).strip()
+
+    # Intentar convertir directamente el string a JSON
     try:
-        return json.loads(response_text_clean)
+        response_json = json.loads(response_text_clean)
     except json.JSONDecodeError:
-        return {"error": "La respuesta no es un JSON válido.", "raw_response": response_text_clean}
+        print("⚠ Error: No se pudo decodificar JSON directamente. Intentando extraer JSON dentro del texto...")
+
+        # Buscar cualquier bloque JSON dentro del texto usando expresiones regulares
+        match = re.search(r'(\{.*?\})', response_text_clean, re.DOTALL)
+        if match:
+            try:
+                response_json = json.loads(match.group(1))
+            except json.JSONDecodeError:
+                return {"error": "No se pudo extraer JSON válido.", "raw_response": response_text_clean}
+        else:
+            return {"error": "No se encontró JSON en la respuesta.", "raw_response": response_text_clean}
+
+    # Asegurar que "respuesta_correcta" esté en formato string (puede venir como lista)
+    if isinstance(response_json.get("respuesta_correcta"), list):
+        response_json["respuesta_correcta"] = ", ".join(response_json["respuesta_correcta"])
+    
+    return response_json
 
 def obtener_preguntas():
     obtener_preguntas_imagenes(PDF_PATH)
@@ -173,24 +252,31 @@ def separar_preguntas(archivo_entrada, inicio=30, fin=31):
     return preguntas_filtradas
 
 
-# Función para Expert
-# 🔹 Función para consultar al modelo de lenguaje
+# 🔹 Función para elegir el modelo adecuado y realizar la consulta
+def chat_with_model(model, prompt_system, prompt_user, max_retries=3, delay=10):
+    if model == "groq":
+        return chat_with_groq(prompt_system, prompt_user, max_retries, delay)
+    elif model == "qwen":
+        return chat_with_qwen(prompt_system, prompt_user, max_retries, delay)
+    elif model == "dseek":
+        return chat_with_dseek(prompt_system, prompt_user, max_retries, delay)
+    else:
+        return json.dumps({"error": "Modelo no reconocido"}, ensure_ascii=False, indent=4)
+
+
+# 🔹 Función genérica para cada agente
 def expert_bot(state: AgentState, model="qwen") -> AgentState:
-    """El experto responde la pregunta usando Groq o Qwen y actualiza el estado."""
+    """El experto responde la pregunta usando el modelo seleccionado y actualiza el estado."""
     log_section("🧑‍🏫 CONSULTANDO AL EXPERTO")
 
     prompt_system = json.dumps(PROMPTS["expert"], ensure_ascii=False, indent=4)
-    
-    if model == "groq":
-        response_text = chat_with_groq(prompt_system, state.query)
-    elif model == "qwen":
-        response_text = chat_with_qwen(prompt_system, state.query)
-    else:
-        return AgentState(query=state.query, response=json.dumps({"error": "Modelo no reconocido"}), status="error")
+    response_text = chat_with_model(model, prompt_system, state.query)
 
     try:
         response_json = clean_json_response(response_text)
-        status = response_json.get("status", "error")  # Si no hay status, asumimos error
+        print("\n\033[1;34m🔹 EXPERTO: \033[0m")  # Azul
+        print(json.dumps(response_json.get("respuesta_correcta", {}), indent=4, ensure_ascii=False))
+        status = response_json.get("status", "error")
     except Exception as e:
         response_json = {"error": f"Respuesta inválida del modelo: {str(e)}"}
         status = "error"
@@ -198,12 +284,10 @@ def expert_bot(state: AgentState, model="qwen") -> AgentState:
     return AgentState(query=state.query, response=json.dumps(response_json, ensure_ascii=False, indent=4), status=status)
 
 
-# Función para Revisor con selección de modelo
-def revisor_bot(state: AgentState, model="groq") -> AgentState:
+def revisor_bot(state: AgentState, model="qwen") -> AgentState:
     """El revisor revisa la respuesta del experto y actualiza el estado."""
     log_section("🧐 CONSULTANDO AL REVISOR")
 
-    # Asegurar que la respuesta del experto es un diccionario válido
     if isinstance(state.response, str):
         try:
             state.response = json.loads(state.response)
@@ -219,16 +303,26 @@ def revisor_bot(state: AgentState, model="groq") -> AgentState:
     prompt_system = json.dumps(PROMPTS["revisor"], ensure_ascii=False, indent=4)
     prompt_user = json.dumps(revisor_input, ensure_ascii=False)
 
-    if model == "groq":
-        response_text = chat_with_groq(prompt_system, prompt_user)
-    elif model == "qwen":
-        response_text = chat_with_qwen(prompt_system, prompt_user)
-    else:
-        return AgentState(query=state.query, response=json.dumps({"error": "Modelo no reconocido"}), status="error")
+    response_text = chat_with_model(model, prompt_system, prompt_user)
 
     try:
         response_json = clean_json_response(response_text)
-        status = response_json.get("status", "error")  # Si no hay status, asumimos error
+        
+        # 🔹 Verificación adicional: Si no hay respuesta del revisor, indicar un problema
+        if not response_json.get("respuesta_correcta"):
+            response_json["respuesta_correcta"] = "No disponible"
+            print("⚠ El revisor no devolvió una respuesta clara.")
+
+        print("\n\033[1;35m🔹 REVISOR: \033[0m")  # Magenta
+        print(f"📖 Respuesta del revisor: {response_json.get('respuesta_correcta', 'No disponible')}")
+        print(f"📌 ¿Necesita auditoría? {'Sí' if response_json.get('status') == 'error' else 'No'}")
+
+        if response_json.get("errores_detectados"):
+            print(f"❌ Errores detectados: {response_json.get('errores_detectados')}")
+        else:
+            print(f"✔ Evaluación: {response_json.get('evaluación', 'No disponible')}")
+
+        status = response_json.get("status", "error")
     except json.JSONDecodeError:
         response_json = {"error": "Respuesta inválida del revisor"}
         status = "error"
@@ -236,12 +330,10 @@ def revisor_bot(state: AgentState, model="groq") -> AgentState:
     return AgentState(query=state.query, response=json.dumps(response_json, ensure_ascii=False), status=status)
 
 
-# Función para Auditor con selección de modelo
-def auditor_bot(state: AgentState, model="groq") -> AgentState:
+def auditor_bot(state: AgentState, model="qwen") -> AgentState:
     """El auditor revisa la pregunta y valida la respuesta."""
     log_section("🔍 CONSULTANDO AL AUDITOR")
 
-    # Asegurar que la respuesta del revisor es un diccionario válido
     if isinstance(state.response, str):
         try:
             state.response = json.loads(state.response)
@@ -259,16 +351,21 @@ def auditor_bot(state: AgentState, model="groq") -> AgentState:
     prompt_system = json.dumps(PROMPTS["auditor"], ensure_ascii=False, indent=4)
     prompt_user = json.dumps(auditor_input, ensure_ascii=False)
 
-    if model == "groq":
-        response_text = chat_with_groq(prompt_system, prompt_user)
-    elif model == "qwen":
-        response_text = chat_with_qwen(prompt_system, prompt_user)
-    else:
-        return AgentState(query=state.query, response=json.dumps({"error": "Modelo no reconocido"}), status="error")
+    response_text = chat_with_model(model, prompt_system, prompt_user)
 
     try:
         response_json = clean_json_response(response_text)
-        status = response_json.get("status", "error")  # Si no hay status, asumimos error
+        
+        # 🔹 Si la respuesta correcta es una lista, convertir a string
+        if isinstance(response_json.get("respuesta_correcta"), list):
+            response_json["respuesta_correcta"] = ", ".join(response_json["respuesta_correcta"])
+
+        print("\n\033[1;32m🔹 AUDITOR: \033[0m")  # Verde
+        print("📖 RESPUESTA:")
+        print(response_json.get("respuesta_correcta", "No disponible"))
+        print("🔖 COMENTARIO:")
+        print(response_json.get("comentario", "No disponible"))
+        status = response_json.get("status", "error")
     except json.JSONDecodeError:
         response_json = {"error": "Respuesta inválida del auditor"}
         status = "error"
@@ -276,50 +373,165 @@ def auditor_bot(state: AgentState, model="groq") -> AgentState:
     return AgentState(query=state.query, response=json.dumps(response_json, ensure_ascii=False), status=status)
 
 
+def teacher_bot(state: AgentState, model="qwen") -> AgentState:
+    """El profesor responde la pregunta usando el modelo seleccionado."""
+    log_section("👨🏻‍🏫 CONSULTANDO AL PROFESOR")
+
+    prompt_system = json.dumps(PROMPTS["teacher"], ensure_ascii=False, indent=4)
+    response_text = chat_with_model(model, prompt_system, state.query)
+
+    try:
+        response_json = clean_json_response(response_text)
+        print("\n\033[1;32m🔹 TEACHER: \033[0m")  # Verde
+        print("📖 Explicación:")
+        print(response_json.get("explicación", "No disponible"))
+        print("🔬 Ampliación:")
+        print(response_json.get("ampliación", "No disponible"))
+        status = response_json.get("status", "error")
+    except Exception as e:
+        response_json = {"error": f"Respuesta inválida del modelo: {str(e)}"}
+        status = "error"
+
+    return AgentState(query=state.query, response=json.dumps(response_json, ensure_ascii=False, indent=4), status=status)
+
+
+def memory_bot(state: AgentState, model="qwen") -> AgentState:
+    """El memory responde la pregunta usando el modelo seleccionado."""
+    log_section("🧠 CONSULTANDO AL MEMORY")
+
+    prompt_system = json.dumps(PROMPTS["memory"], ensure_ascii=False, indent=4)
+    response_text = chat_with_model(model, prompt_system, state.query)
+
+    try:
+        response_json = clean_json_response(response_text)
+        print("\n\033[1;33m🔹 MEMORY: \033[0m")  # Amarillo
+        print("🎭 Asociación inverosímil:")
+        print(response_json.get("asociación_inverosimil", "No disponible"))
+        print("🖼 Imagen vivida:")
+        print(response_json.get("imagen_vivida", "No disponible"))
+        print("🏰 Historia:")
+        print(response_json.get("historia", "No disponible"))
+        print("📌 Consejos:")
+        print(response_json.get("consejos", "No disponible"))
+        status = response_json.get("status", "error")
+    except Exception as e:
+        response_json = {"error": f"Respuesta inválida del modelo: {str(e)}"}
+        status = "error"
+
+    return AgentState(query=state.query, response=json.dumps(response_json, ensure_ascii=False, indent=4), status=status)
+   
 
 
 # Definir el flujo de trabajo en LangGraph
 workflow = StateGraph(AgentState)
 
-# Definir nodos
+#  Definir nodos
 workflow.add_node("expert", expert_bot)
 workflow.add_node("revisor", revisor_bot)
 workflow.add_node("auditor", auditor_bot)
+workflow.add_node("teacher", teacher_bot)
+workflow.add_node("memory", memory_bot)
 workflow.add_node("end", lambda state: state)
 
 # Definir punto de entrada
 workflow.set_entry_point("expert")
 
 # Transiciones condicionales
-workflow.add_edge("expert", "revisor")
-workflow.add_conditional_edges("revisor", lambda state: "auditor" if state.status == "error" else "end")
-workflow.add_conditional_edges("auditor", lambda state: "end")
+workflow.add_edge("expert", "revisor")  # Expert siempre envía a revisor
+
+# 🔹 Si `revisor` NO encuentra errores, pasa a `teacher` directamente
+# 🔹 Si `revisor` encuentra errores, pasa a `auditor`
+workflow.add_conditional_edges("revisor", lambda state: "auditor" if state.status == "error" else "teacher")
+
+# 🔹 Si `auditor` revisa, pasa a `teacher` con la respuesta corregida
+workflow.add_edge("auditor", "teacher")
+
+# 🔹 Después de `teacher`, pasa a `memory`
+workflow.add_edge("teacher", "memory")
+
+# 🔹 Después de `memory`, finaliza
+workflow.add_edge("memory", "end")
 
 # Compilar el flujo
 graph = workflow.compile()
 
-if __name__ == "__main__":
-    #obtener_preguntas()
-    # Uso de la función
-    archivo_preguntas = ARCHIVO_PREGUNTAS  # Asegúrate de que el archivo existe y tiene contenido
-    preguntas_seleccionadas = separar_preguntas(archivo_preguntas, 30, 31)
+import sys
 
-    for i, pregunta in enumerate(preguntas_seleccionadas): # Iterar sobre las preguntas
-        log_section(f"📌 Procesando pregunta {i+1}")
-        print(f"\n{pregunta}\n" + "-" * 60)
+try:
+    import msvcrt  # Windows
+    def esperar_tecla():
+        """Espera a que el usuario presione una tecla en Windows. Si es 's', finaliza el programa."""
+        print("\n\033[93m🔹 Presiona cualquier tecla para continuar o 's' para salir... 🔹\033[0m", end="", flush=True)
+        tecla = msvcrt.getch().decode("utf-8").lower()  # Captura la tecla presionada
+        print("\n")  # Salto de línea después de presionar la tecla
 
-        initial_state = AgentState(query=pregunta)
-        result = graph.invoke(initial_state)
+        if tecla == 's':
+            print("\033[92m✅ Finalizando la ejecución.\033[0m")
+            sys.exit(0)  # Termina el programa inmediatamente
 
-        # 🔹 CORRECCIÓN: Acceder a response correctamente
+except ImportError:
+    import termios, tty  # macOS / Linux
+    def esperar_tecla():
+        """Espera a que el usuario presione una tecla en macOS/Linux. Si es 's', finaliza el programa."""
+        print("\n\033[93m🔹 Presiona cualquier tecla para continuar o 's' para salir... 🔹\033[0m", end="", flush=True)
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
         try:
-            final_status = json.loads(result["response"]).get("status", "error")
-            respuesta_correcta = json.loads(result["response"]).get("respuesta_correcta", "No disponible")
-        except json.JSONDecodeError:
-            log_error("❌ Error al interpretar la respuesta JSON del flujo.")
-            final_status = "error"
-            respuesta_correcta = "No disponible"
+            tty.setraw(fd)
+            tecla = sys.stdin.read(1).lower()  # Leer un solo carácter y convertirlo a minúscula
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+        print("\n")  # Salto de línea después de la tecla
 
-        log_final_result(final_status, respuesta_correcta)
+        if tecla == 's':
+            print("\033[92m✅ Finalizando la ejecución.\033[0m")
+            sys.exit(0)  # Termina el programa inmediatamente
 
+
+if __name__ == "__main__":
+    archivo_preguntas = ARCHIVO_PREGUNTAS  
+    max_preguntas = 210  # Límite máximo de preguntas a procesar
+    inicio = int(input("Ingrese el número de la primera pregunta a procesar: "))
+    fin = inicio + 4  # Se procesan 5 preguntas por iteración
+
+    while inicio <= max_preguntas:
+        preguntas_seleccionadas = separar_preguntas(archivo_preguntas, inicio, fin)
+
+        if not preguntas_seleccionadas:
+            print("\033[91m🚨 No hay más preguntas disponibles en el rango seleccionado.\033[0m")
+            break
+
+        for i, pregunta in enumerate(preguntas_seleccionadas, start=inicio):  # Iterar sobre las preguntas
+            log_section(f"📌 Procesando pregunta {i}")
+            print(f"\n{pregunta}\n" + "-" * 60)
+
+            initial_state = AgentState(query=pregunta)
+            result = graph.invoke(initial_state)
+
+            # 🔹 CORRECCIÓN: Acceder a response correctamente
+            try:
+                response_json = json.loads(result["response"])
+                final_status = response_json.get("status", "error")
+                respuesta_correcta = response_json.get("respuesta_correcta", "No disponible")
+            except json.JSONDecodeError:
+                log_error("❌ Error al interpretar la respuesta JSON del flujo.")
+                final_status = "error"
+                respuesta_correcta = "No disponible"
+
+            log_final_result(final_status, respuesta_correcta)
+
+            # ✅ Llamar a la función universal para esperar la tecla o salir con 's'
+            esperar_tecla()
+
+        # Preguntar al usuario si desea continuar con 5 preguntas más
+        continuar = input("¿Desea continuar con 5 preguntas más? (s/n): ").strip().lower()
+        if continuar == 's':
+            print("\033[92m✅ Finalizando la ejecución.\033[0m")
+            break
+
+        # Incrementar el rango de preguntas
+        inicio = fin + 1
+        fin = min(inicio + 4, max_preguntas)  # Evitar sobrepasar el límite de 210 preguntas
+
+    print("\033[92m✅ Se han procesado todas las preguntas dentro del límite establecido.\033[0m")
 
