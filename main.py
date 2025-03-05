@@ -182,12 +182,6 @@ def chat_with_dseek(prompt_system, prompt_user, max_retries=3, delay=10):
 
 
 # 🔹 Función para limpiar bloques de código Markdown (evita duplicación)
-import json
-import re
-
-import json
-import re
-
 def clean_json_response(response_text):
     """Limpia el JSON eliminando bloques Markdown y asegurando que la respuesta sea válida."""
     
@@ -272,10 +266,14 @@ def expert_bot(state: AgentState, model="qwen") -> AgentState:
     prompt_system = json.dumps(PROMPTS["expert"], ensure_ascii=False, indent=4)
     response_text = chat_with_model(model, prompt_system, state.query)
 
+    # 🔹 Imprimir la respuesta completa antes de procesarla
+    print("\n\033[1;35m🔹 RESPUESTA COMPLETA DEL MODELO: \033[0m")  # Morado
+    print(response_text)  
+
     try:
         response_json = clean_json_response(response_text)
         print("\n\033[1;34m🔹 EXPERTO: \033[0m")  # Azul
-        print(json.dumps(response_json.get("respuesta_correcta", {}), indent=4, ensure_ascii=False))
+        print(json.dumps(response_json.get("respuesta", {}), indent=4, ensure_ascii=False))
         status = response_json.get("status", "error")
     except Exception as e:
         response_json = {"error": f"Respuesta inválida del modelo: {str(e)}"}
@@ -285,7 +283,7 @@ def expert_bot(state: AgentState, model="qwen") -> AgentState:
 
 
 def revisor_bot(state: AgentState, model="qwen") -> AgentState:
-    """El revisor revisa la respuesta del experto y actualiza el estado."""
+    """El revisor revisa la respuesta del experto y valida si el status es ok."""
     log_section("🧐 CONSULTANDO AL REVISOR")
 
     if isinstance(state.response, str):
@@ -294,34 +292,32 @@ def revisor_bot(state: AgentState, model="qwen") -> AgentState:
         except json.JSONDecodeError:
             state.response = {"error": "Respuesta inválida del experto"}
 
+    status_experto = state.response.get("status", "error")
+    if status_experto == 'error':
+        print(f"Hubo un error en el nodo anterior")
+    respuesta_experto = state.response.get("respuesta", [])
+    errores_detectados = state.response.get("errores", "No especificado")
+
     revisor_input = {
         "pregunta": state.query,
-        "respuesta_experto": state.response.get("respuesta_correcta", "No disponible"),
-        "errores_detectados_experto": state.response.get("error_detectado", "Ninguno"),
+        "respuesta_experto": respuesta_experto,
+        "errores_detectados_experto": errores_detectados,
     }
+
+    print("\n\033[1;35m🔹 QUERY COMPLETA DEL REVISOR: \033[0m")  # Morado
+    print(revisor_input) 
 
     prompt_system = json.dumps(PROMPTS["revisor"], ensure_ascii=False, indent=4)
     prompt_user = json.dumps(revisor_input, ensure_ascii=False)
 
     response_text = chat_with_model(model, prompt_system, prompt_user)
 
+    # 🔹 Imprimir la respuesta completa antes de procesarla
+    print("\n\033[1;35m🔹 RESPUESTA COMPLETA DEL REVISOR: \033[0m")  # Morado
+    print(response_text)  
+
     try:
         response_json = clean_json_response(response_text)
-        
-        # 🔹 Verificación adicional: Si no hay respuesta del revisor, indicar un problema
-        if not response_json.get("respuesta_correcta"):
-            response_json["respuesta_correcta"] = "No disponible"
-            print("⚠ El revisor no devolvió una respuesta clara.")
-
-        print("\n\033[1;35m🔹 REVISOR: \033[0m")  # Magenta
-        print(f"📖 Respuesta del revisor: {response_json.get('respuesta_correcta', 'No disponible')}")
-        print(f"📌 ¿Necesita auditoría? {'Sí' if response_json.get('status') == 'error' else 'No'}")
-
-        if response_json.get("errores_detectados"):
-            print(f"❌ Errores detectados: {response_json.get('errores_detectados')}")
-        else:
-            print(f"✔ Evaluación: {response_json.get('evaluación', 'No disponible')}")
-
         status = response_json.get("status", "error")
     except json.JSONDecodeError:
         response_json = {"error": "Respuesta inválida del revisor"}
@@ -342,16 +338,18 @@ def auditor_bot(state: AgentState, model="qwen") -> AgentState:
 
     auditor_input = {
         "pregunta": state.query,
-        "respuesta_experto": state.response.get("respuesta_correcta", "No disponible"),
-        "errores_detectados_experto": state.response.get("error_detectado", "Ninguno"),
-        "respuesta_revisor": state.response.get("respuesta_correcta", "No disponible"),
-        "errores_detectados_revisor": state.response.get("errores_detectados", []),
+        "respuesta_revisor": state.response.get("respuesta", "No disponible"),
+        "respuesta_experto": state.response.get("respuesta_expert", "No disponible"),
     }
 
     prompt_system = json.dumps(PROMPTS["auditor"], ensure_ascii=False, indent=4)
     prompt_user = json.dumps(auditor_input, ensure_ascii=False)
 
     response_text = chat_with_model(model, prompt_system, prompt_user)
+
+    # 🔹 Imprimir la respuesta completa antes de procesarla
+    print("\n\033[1;35m🔹 RESPUESTA COMPLETA DEL AUDITOR: \033[0m")  # Morado
+    print(response_text) 
 
     try:
         response_json = clean_json_response(response_text)
@@ -378,15 +376,32 @@ def teacher_bot(state: AgentState, model="qwen") -> AgentState:
     log_section("👨🏻‍🏫 CONSULTANDO AL PROFESOR")
 
     prompt_system = json.dumps(PROMPTS["teacher"], ensure_ascii=False, indent=4)
-    response_text = chat_with_model(model, prompt_system, state.query)
+
+    try:
+        response_dict = json.loads(state.response)  # Convierte el string JSON a diccionario
+    except json.JSONDecodeError:
+        return AgentState(query=state.query, response=json.dumps({"error": "Respuesta inválida del revisor"}, ensure_ascii=False), status="error")
+
+    pregunta = response_dict.get("pregunta", "error")
+    opciones = response_dict.get("opciones", {})
+    respuesta = response_dict.get("respuesta", [])
+
+    teacher_input = {
+        "pregunta": pregunta,
+        "opciones": opciones,
+        "respuesta": respuesta
+    }
+
+    prompt_user = json.dumps(teacher_input, ensure_ascii=False)
+
+    response_text = chat_with_model(model, prompt_system, prompt_user)
+    
+    # 🔹 Imprimir la respuesta completa antes de procesarla
+    print("\n\033[1;35m🔹 RESPUESTA COMPLETA DEL PROFESOR: \033[0m")  # Morado
+    print(response_text) 
 
     try:
         response_json = clean_json_response(response_text)
-        print("\n\033[1;32m🔹 TEACHER: \033[0m")  # Verde
-        print("📖 Explicación:")
-        print(response_json.get("explicación", "No disponible"))
-        print("🔬 Ampliación:")
-        print(response_json.get("ampliación", "No disponible"))
         status = response_json.get("status", "error")
     except Exception as e:
         response_json = {"error": f"Respuesta inválida del modelo: {str(e)}"}
@@ -400,60 +415,75 @@ def memory_bot(state: AgentState, model="qwen") -> AgentState:
     log_section("🧠 CONSULTANDO AL MEMORY")
 
     prompt_system = json.dumps(PROMPTS["memory"], ensure_ascii=False, indent=4)
-    response_text = chat_with_model(model, prompt_system, state.query)
+
+    try:
+        response_dict = json.loads(state.response)  # Convierte el JSON string en diccionario
+    except json.JSONDecodeError:
+        return AgentState(query=state.query, response=json.dumps({"error": "Respuesta inválida del profesor"}, ensure_ascii=False), status="error")
+
+    pregunta = response_dict.get("pregunta_explicada", "")
+    respuesta_correcta = response_dict.get("respuesta_correcta", "")
+    respuesta_incorrecta = response_dict.get("respuesta_incorrecta", "")
+
+    memory_input = {
+        "pregunta": pregunta,
+        "respuesta_correcta": respuesta_correcta,
+        "respuesta_incorrecta": respuesta_incorrecta
+    }
+
+    # 🔹 Imprimir la respuesta completa antes de procesarla
+    print("\n\033[1;35m🔹 MEMORY INPUT: \033[0m")  # Morado
+    print(memory_input) 
+
+
+    prompt_user = json.dumps(memory_input, ensure_ascii=False)
+
+    response_text = chat_with_model(model, prompt_system, prompt_user)
+
+    # 🔹 Imprimir la respuesta completa antes de procesarla
+    print("\n\033[1;35m🔹 RESPUESTA COMPLETA DEL MEMORY: \033[0m")  # Morado
+    print(response_text) 
 
     try:
         response_json = clean_json_response(response_text)
-        print("\n\033[1;33m🔹 MEMORY: \033[0m")  # Amarillo
-        print("🎭 Asociación inverosímil:")
-        print(response_json.get("asociación_inverosimil", "No disponible"))
-        print("🖼 Imagen vivida:")
-        print(response_json.get("imagen_vivida", "No disponible"))
-        print("🏰 Historia:")
-        print(response_json.get("historia", "No disponible"))
-        print("📌 Consejos:")
-        print(response_json.get("consejos", "No disponible"))
         status = response_json.get("status", "error")
     except Exception as e:
         response_json = {"error": f"Respuesta inválida del modelo: {str(e)}"}
         status = "error"
 
     return AgentState(query=state.query, response=json.dumps(response_json, ensure_ascii=False, indent=4), status=status)
-   
 
 
-# Definir el flujo de trabajo en LangGraph
-workflow = StateGraph(AgentState)
+# Modificar el flujo de trabajo
+graph = StateGraph(AgentState)
 
-#  Definir nodos
-workflow.add_node("expert", expert_bot)
-workflow.add_node("revisor", revisor_bot)
-workflow.add_node("auditor", auditor_bot)
-workflow.add_node("teacher", teacher_bot)
-workflow.add_node("memory", memory_bot)
-workflow.add_node("end", lambda state: state)
+graph.add_node("expert", expert_bot)
+graph.add_node("revisor", revisor_bot)
+graph.add_node("auditor", auditor_bot)
+graph.add_node("teacher", teacher_bot)
+graph.add_node("memory", memory_bot)
+graph.add_node("end", lambda state: state)
 
-# Definir punto de entrada
-workflow.set_entry_point("expert")
+# Punto de entrada
+graph.set_entry_point("expert")
 
-# Transiciones condicionales
-workflow.add_edge("expert", "revisor")  # Expert siempre envía a revisor
+# Expert siempre pasa a Revisor
+graph.add_edge("expert", "revisor")
 
-# 🔹 Si `revisor` NO encuentra errores, pasa a `teacher` directamente
-# 🔹 Si `revisor` encuentra errores, pasa a `auditor`
-workflow.add_conditional_edges("revisor", lambda state: "auditor" if state.status == "error" else "teacher")
+# Si Revisor encuentra errores, pasa a Auditor. Si no, pasa a Teacher
+graph.add_conditional_edges("revisor", lambda state: "auditor" if json.loads(state.response).get("comparación") == "diferentes" else "teacher")
 
-# 🔹 Si `auditor` revisa, pasa a `teacher` con la respuesta corregida
-workflow.add_edge("auditor", "teacher")
+# Auditor siempre pasa a Teacher
+graph.add_edge("auditor", "teacher")
 
-# 🔹 Después de `teacher`, pasa a `memory`
-workflow.add_edge("teacher", "memory")
+# Teacher siempre pasa a Memory
+graph.add_edge("teacher", "memory")
 
-# 🔹 Después de `memory`, finaliza
-workflow.add_edge("memory", "end")
+# Memory finaliza
+graph.add_edge("memory", "end")
 
 # Compilar el flujo
-graph = workflow.compile()
+graph = graph.compile()
 
 import sys
 
