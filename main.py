@@ -266,10 +266,6 @@ def expert_bot(state: AgentState, model="qwen") -> AgentState:
     prompt_system = json.dumps(PROMPTS["expert"], ensure_ascii=False, indent=4)
     response_text = chat_with_model(model, prompt_system, state.query)
 
-    # 🔹 Imprimir la respuesta completa antes de procesarla
-    print("\n\033[1;35m🔹 RESPUESTA COMPLETA DEL MODELO: \033[0m")  # Morado
-    print(response_text)  
-
     try:
         response_json = clean_json_response(response_text)
         print("\n\033[1;34m🔹 EXPERTO: \033[0m")  # Azul
@@ -304,20 +300,16 @@ def revisor_bot(state: AgentState, model="qwen") -> AgentState:
         "errores_detectados_experto": errores_detectados,
     }
 
-    print("\n\033[1;35m🔹 QUERY COMPLETA DEL REVISOR: \033[0m")  # Morado
-    print(revisor_input) 
-
     prompt_system = json.dumps(PROMPTS["revisor"], ensure_ascii=False, indent=4)
     prompt_user = json.dumps(revisor_input, ensure_ascii=False)
 
     response_text = chat_with_model(model, prompt_system, prompt_user)
 
-    # 🔹 Imprimir la respuesta completa antes de procesarla
-    print("\n\033[1;35m🔹 RESPUESTA COMPLETA DEL REVISOR: \033[0m")  # Morado
-    print(response_text)  
-
     try:
         response_json = clean_json_response(response_text)
+        print("\n\033[1;34m🔹 REVISOR: \033[0m")  # Azul
+        print(json.dumps(response_json.get("respuesta", {}), indent=4, ensure_ascii=False))
+        print(json.dumps(response_json.get("comparación", {}), indent=4, ensure_ascii=False))
         status = response_json.get("status", "error")
     except json.JSONDecodeError:
         response_json = {"error": "Respuesta inválida del revisor"}
@@ -346,10 +338,6 @@ def auditor_bot(state: AgentState, model="qwen") -> AgentState:
     prompt_user = json.dumps(auditor_input, ensure_ascii=False)
 
     response_text = chat_with_model(model, prompt_system, prompt_user)
-
-    # 🔹 Imprimir la respuesta completa antes de procesarla
-    print("\n\033[1;35m🔹 RESPUESTA COMPLETA DEL AUDITOR: \033[0m")  # Morado
-    print(response_text) 
 
     try:
         response_json = clean_json_response(response_text)
@@ -396,12 +384,12 @@ def teacher_bot(state: AgentState, model="qwen") -> AgentState:
 
     response_text = chat_with_model(model, prompt_system, prompt_user)
     
-    # 🔹 Imprimir la respuesta completa antes de procesarla
-    print("\n\033[1;35m🔹 RESPUESTA COMPLETA DEL PROFESOR: \033[0m")  # Morado
-    print(response_text) 
-
     try:
         response_json = clean_json_response(response_text)
+        print("\n\033[1;35m🔹 RESPUESTA DEL PROFESOR: \033[0m")  # Morado
+        print(json.dumps(response_json.get("pregunta_explicada", {}), indent=4, ensure_ascii=False))
+        print(json.dumps(response_json.get("respuesta_correcta", {}), indent=4, ensure_ascii=False))
+        print(json.dumps(response_json.get("respuesta_incorrecta", {}), indent=4, ensure_ascii=False))
         status = response_json.get("status", "error")
     except Exception as e:
         response_json = {"error": f"Respuesta inválida del modelo: {str(e)}"}
@@ -431,21 +419,16 @@ def memory_bot(state: AgentState, model="qwen") -> AgentState:
         "respuesta_incorrecta": respuesta_incorrecta
     }
 
-    # 🔹 Imprimir la respuesta completa antes de procesarla
-    print("\n\033[1;35m🔹 MEMORY INPUT: \033[0m")  # Morado
-    print(memory_input) 
-
-
     prompt_user = json.dumps(memory_input, ensure_ascii=False)
 
     response_text = chat_with_model(model, prompt_system, prompt_user)
 
-    # 🔹 Imprimir la respuesta completa antes de procesarla
-    print("\n\033[1;35m🔹 RESPUESTA COMPLETA DEL MEMORY: \033[0m")  # Morado
-    print(response_text) 
-
     try:
         response_json = clean_json_response(response_text)
+        print("\n\033[1;35m🔹 RESPUESTA DE MEMORY: \033[0m")  # Morado
+        print(json.dumps(response_json.get("resumen", {}), indent=4, ensure_ascii=False))
+        print(json.dumps(response_json.get("asociaciónes_inverosimiles", {}), indent=4, ensure_ascii=False))
+        print(json.dumps(response_json.get("historia", {}), indent=4, ensure_ascii=False))
         status = response_json.get("status", "error")
     except Exception as e:
         response_json = {"error": f"Respuesta inválida del modelo: {str(e)}"}
