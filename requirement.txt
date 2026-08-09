@@ -1,5 +1,0 @@
-pdfplumber
-python-dotenv
-pillow
-groq
-openai

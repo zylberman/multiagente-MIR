@@ -1,0 +1,102 @@
+"""Stable contracts shared by ingestion, agents and output assembly."""
+
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Any
+
+
+@dataclass(frozen=True)
+class QuestionOption:
+    option_id: str
+    text: str
+
+    def __post_init__(self) -> None:
+        if not self.option_id.strip() or not self.text.strip():
+            raise ValueError("Question options require a non-empty id and text")
+
+
+@dataclass(frozen=True)
+class QuestionAsset:
+    path: str
+    asset_type: str = "image"
+    source_page: int | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.path.strip():
+            raise ValueError("Question asset path cannot be empty")
+
+
+@dataclass(frozen=True)
+class MirQuestion:
+    question_id: str
+    stem: str
+    options: tuple[QuestionOption, ...]
+    source_page: int | None = None
+    source_pdf: str | None = None
+    has_associated_image: bool = False
+    associated_image_paths: tuple[str, ...] = ()
+    raw_extracted_text: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.question_id.strip():
+            raise ValueError("question_id cannot be empty")
+        if not self.stem.strip():
+            raise ValueError("stem cannot be empty")
+        if len(self.options) < 2:
+            raise ValueError("A MIR question requires at least two options")
+        option_ids = [option.option_id for option in self.options]
+        if len(option_ids) != len(set(option_ids)):
+            raise ValueError("Question option ids must be unique")
+        if self.has_associated_image and not self.associated_image_paths:
+            warnings = self.metadata.get("warnings", [])
+            if "associated image not found" not in warnings:
+                warnings.append("associated image not found")
+                self.metadata["warnings"] = warnings
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class AgentResult:
+    agent_name: str
+    content: str
+    predicted_option: str | None = None
+    confidence: float | None = None
+    evidence_notes: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.agent_name.strip() or not self.content.strip():
+            raise ValueError("Agent results require agent_name and content")
+        if self.confidence is not None and not 0 <= self.confidence <= 1:
+            raise ValueError("confidence must be between 0 and 1")
+
+
+@dataclass(frozen=True)
+class FinalExplanation:
+    question_id: str
+    predicted_correct_option: str | None
+    final_answer_text: str
+    clinical_explanation: str
+    pharmacology_explanation: str
+    terminology_explanation: str
+    incorrect_option_analysis: dict[str, str]
+    mnemonic_visual_analogy: str
+    confidence: float | None = None
+    citations: tuple[str, ...] = ()
+    evidence_notes: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()
+    agent_results: tuple[AgentResult, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def normalized_source_name(path: str | Path | None) -> str | None:
+    """Return only a source filename so local absolute paths do not leak."""
+    return Path(path).name if path else None
