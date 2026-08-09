@@ -23,14 +23,21 @@ class MultiAgentPipeline:
 
     def run(self, question: MirQuestion) -> FinalExplanation:
         results: list[AgentResult] = []
-        for name in AGENT_NAMES[:-1]:
+        for index, name in enumerate(AGENT_NAMES[:-1]):
             agent = SpecializedAgent(
                 name=name,
                 prompt=self.prompts[name],
                 model=self.settings.agent_models[name],
                 provider=self.provider,
             )
-            results.append(agent.run(question, tuple(results)))
+            result = agent.run(question, tuple(results))
+            results.append(result)
+            if name == "answer" and result.status == "failed":
+                results.extend(
+                    _skipped_result(skipped_name, self.settings.agent_models[skipped_name], self.provider.provider_name)
+                    for skipped_name in AGENT_NAMES[index + 1 :]
+                )
+                return assemble_final_explanation(question, tuple(results))
 
         mnemonic = SpecializedAgent(
             name="mnemonic",
@@ -52,12 +59,19 @@ def assemble_final_explanation(
         raise ValueError(f"Missing agent results: {', '.join(sorted(missing))}")
 
     answer = by_name["answer"]
+    if answer.status == "failed":
+        final_status = "failed"
+    elif any(result.status != "success" for result in results):
+        final_status = "partial"
+    else:
+        final_status = "complete"
     extraction_warnings = question.warnings
     agent_warnings = tuple(warning for result in results for warning in result.warnings)
     evidence = tuple(note for result in results for note in result.evidence_notes)
     return FinalExplanation(
         question_id=question.question_id,
-        predicted_correct_option=answer.predicted_option,
+        status=final_status,
+        predicted_correct_option=answer.predicted_correct_option,
         final_answer_text=answer.content,
         clinical_explanation=by_name["clinical"].content,
         pharmacology_explanation=by_name["pharmacology"].content,
@@ -68,4 +82,15 @@ def assemble_final_explanation(
         evidence_notes=evidence,
         warnings=extraction_warnings + agent_warnings,
         agent_results=results,
+    )
+
+
+def _skipped_result(agent_name: str, model: str, provider: str) -> AgentResult:
+    return AgentResult(
+        agent_name=agent_name,
+        status="skipped",
+        content="",
+        warnings=("skipped because the answer agent failed",),
+        model=model,
+        provider=provider,
     )

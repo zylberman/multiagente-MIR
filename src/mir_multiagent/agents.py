@@ -29,7 +29,8 @@ class SpecializedAgent:
     provider: LlmProvider
 
     def run(self, question: MirQuestion, context: tuple[AgentResult, ...] = ()) -> AgentResult:
-        prior = "\n\n".join(f"[{item.agent_name}]\n{item.content}" for item in context)
+        successful_context = tuple(item for item in context if item.status == "success")
+        prior = "\n\n".join(f"[{item.agent_name}]\n{item.content}" for item in successful_context)
         user_prompt = render_question(question)
         if prior:
             user_prompt += f"\n\nPrevious specialist analyses:\n{prior}"
@@ -43,7 +44,17 @@ class SpecializedAgent:
             LOGGER.error("Agent %s failed: %s", self.name, type(exc).__name__)
             return AgentResult(
                 agent_name=self.name,
-                content=f"Agent unavailable: {type(exc).__name__}",
+                status="failed",
+                content="",
                 warnings=(f"{self.name} agent failed",),
+                error_type=type(exc).__name__,
+                model=self.model,
+                provider=self.provider.provider_name,
             )
-        return AgentResult(agent_name=self.name, content=content)
+        return AgentResult(
+            agent_name=self.name,
+            status="success",
+            content=content,
+            model=self.model,
+            provider=self.provider.provider_name,
+        )

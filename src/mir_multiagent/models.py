@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 
 @dataclass(frozen=True)
@@ -70,15 +70,26 @@ class MirQuestion:
 @dataclass(frozen=True)
 class AgentResult:
     agent_name: str
+    status: Literal["success", "failed", "skipped"]
     content: str
-    predicted_option: str | None = None
+    predicted_correct_option: str | None = None
     confidence: float | None = None
     evidence_notes: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
+    error_type: str | None = None
+    model: str | None = None
+    provider: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if not self.agent_name.strip() or not self.content.strip():
-            raise ValueError("Agent results require agent_name and content")
+        if not self.agent_name.strip():
+            raise ValueError("Agent results require agent_name")
+        if self.status == "success" and not self.content.strip():
+            raise ValueError("Successful agent results require content")
+        if self.status == "failed" and not self.error_type:
+            raise ValueError("Failed agent results require error_type")
+        if self.status != "failed" and self.error_type:
+            raise ValueError("Only failed agent results may include error_type")
         if self.confidence is not None and not 0 <= self.confidence <= 1:
             raise ValueError("confidence must be between 0 and 1")
 
@@ -86,6 +97,7 @@ class AgentResult:
 @dataclass(frozen=True)
 class FinalExplanation:
     question_id: str
+    status: Literal["complete", "partial", "failed"]
     predicted_correct_option: str | None
     final_answer_text: str
     clinical_explanation: str

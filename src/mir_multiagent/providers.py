@@ -8,17 +8,23 @@ from .config import Settings
 
 
 class LlmProvider(Protocol):
+    provider_name: str
+
     def complete(self, *, system_prompt: str, user_prompt: str, model: str) -> str: ...
 
 
 class MockProvider:
     """Deterministic smoke-test backend; it does not produce medical answers."""
 
+    provider_name = "mock"
+
     def complete(self, *, system_prompt: str, user_prompt: str, model: str) -> str:
         return "SMOKE_TEST_ONLY: provider call completed; no medical answer was generated."
 
 
 class GroqProvider:
+    provider_name = "groq"
+
     def __init__(self, api_key: str) -> None:
         try:
             from groq import Groq
@@ -39,6 +45,8 @@ class GroqProvider:
 
 
 class OpenAICompatibleProvider:
+    provider_name = "openai_compatible"
+
     def __init__(self, *, base_url: str, api_key: str | None) -> None:
         try:
             from openai import OpenAI
