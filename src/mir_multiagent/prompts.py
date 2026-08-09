@@ -3,16 +3,25 @@
 from __future__ import annotations
 
 import json
+from importlib import resources
 from pathlib import Path
 
 REQUIRED_PROMPTS = {"answer", "pharmacology", "clinical", "terminology", "mnemonic"}
-DEFAULT_PATH = Path(__file__).parents[2] / "config" / "prompts.json"
 
 
 def load_prompts(path: str | Path | None = None) -> dict[str, str]:
-    prompt_path = Path(path) if path else DEFAULT_PATH
     try:
-        data = json.loads(prompt_path.read_text(encoding="utf-8"))
+        if path:
+            prompt_path = Path(path)
+            prompt_text = prompt_path.read_text(encoding="utf-8")
+        else:
+            prompt_path = "mir_multiagent.resources/prompts.json"
+            prompt_text = (
+                resources.files("mir_multiagent.resources")
+                .joinpath("prompts.json")
+                .read_text(encoding="utf-8")
+            )
+        data = json.loads(prompt_text)
     except FileNotFoundError as exc:
         raise ValueError(f"Prompt configuration not found: {prompt_path}") from exc
     missing = REQUIRED_PROMPTS - data.keys()
