@@ -52,7 +52,7 @@ def assemble_final_explanation(
         raise ValueError(f"Missing agent results: {', '.join(sorted(missing))}")
 
     answer = by_name["answer"]
-    extraction_warnings = tuple(question.metadata.get("warnings", []))
+    extraction_warnings = question.warnings
     agent_warnings = tuple(warning for result in results for warning in result.warnings)
     evidence = tuple(note for result in results for note in result.evidence_notes)
     return FinalExplanation(

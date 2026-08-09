@@ -14,8 +14,8 @@ LOGGER = logging.getLogger(__name__)
 def render_question(question: MirQuestion) -> str:
     options = "\n".join(f"{item.option_id}. {item.text}" for item in question.options)
     image_note = (
-        f"\nAssociated local images: {', '.join(question.associated_image_paths)}"
-        if question.associated_image_paths
+        f"\nAssociated image assets: {len(question.assets)} (binary content is not supplied in P0.1)"
+        if question.assets
         else ""
     )
     return f"Question {question.question_id}: {question.stem}\n{options}{image_note}"

@@ -19,14 +19,22 @@ class QuestionOption:
 
 @dataclass(frozen=True)
 class QuestionAsset:
-    path: str
+    asset_id: str
     asset_type: str = "image"
     source_page: int | None = None
+    local_path: str = ""
+    extraction_method: str = "pdf-embedded-image"
+    association_confidence: float | None = None
+    warnings: tuple[str, ...] = ()
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if not self.path.strip():
-            raise ValueError("Question asset path cannot be empty")
+        if not self.asset_id.strip():
+            raise ValueError("Question asset id cannot be empty")
+        if not self.local_path.strip():
+            raise ValueError("Question asset local_path cannot be empty")
+        if self.association_confidence is not None and not 0 <= self.association_confidence <= 1:
+            raise ValueError("association_confidence must be between 0 and 1")
 
 
 @dataclass(frozen=True)
@@ -37,8 +45,9 @@ class MirQuestion:
     source_page: int | None = None
     source_pdf: str | None = None
     has_associated_image: bool = False
-    associated_image_paths: tuple[str, ...] = ()
+    assets: tuple[QuestionAsset, ...] = ()
     raw_extracted_text: str = ""
+    warnings: tuple[str, ...] = ()
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -51,11 +60,8 @@ class MirQuestion:
         option_ids = [option.option_id for option in self.options]
         if len(option_ids) != len(set(option_ids)):
             raise ValueError("Question option ids must be unique")
-        if self.has_associated_image and not self.associated_image_paths:
-            warnings = self.metadata.get("warnings", [])
-            if "associated image not found" not in warnings:
-                warnings.append("associated image not found")
-                self.metadata["warnings"] = warnings
+        if self.has_associated_image and not self.assets and "associated image not found" not in self.warnings:
+            raise ValueError("Questions with an unresolved image require an explicit warning")
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

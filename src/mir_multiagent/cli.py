@@ -8,7 +8,7 @@ import logging
 from pathlib import Path
 
 from .config import ConfigurationError, Settings
-from .ingestion import extract_questions_from_pdf
+from .ingestion import ingest_pdf
 from .orchestrator import MultiAgentPipeline
 from .providers import build_provider
 
@@ -29,7 +29,16 @@ def main() -> int:
             level=getattr(logging, settings.log_level, logging.INFO),
             format="%(levelname)s %(name)s: %(message)s",
         )
-        questions = extract_questions_from_pdf(args.pdf)
+        image_dir = Path("data/images") / args.pdf.stem
+        ingestion = ingest_pdf(args.pdf, image_output_dir=image_dir)
+        questions = ingestion.questions
+        logging.info(
+            "Ingestion completed: questions=%d discarded=%d warnings=%d assets=%d",
+            len(questions),
+            ingestion.discarded_questions,
+            ingestion.warning_count,
+            len(ingestion.assets),
+        )
         if not questions:
             raise RuntimeError("No structured questions were extracted from the PDF")
         if not 0 <= args.question_index < len(questions):
