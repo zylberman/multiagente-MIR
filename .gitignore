@@ -1,29 +1,33 @@
-# Entornos virtuales
-env/
-.venv/
+# Python
 __pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
 
-# Archivos temporales
-*.pyc
-*.pyo
-*.log
-*.tmp
-
-# Ignorar archivos de configuración
+# Secrets and local configuration
 .env
+.env.*
+!.env.example
 
-# Archivos de salida
+# Local source material and generated artifacts
+data/input/*
+!data/input/.gitkeep
+data/images/*
+!data/images/.gitkeep
+outputs/*
+!outputs/.gitkeep
 pdfs/
 salidas/
+*.log
 
-# No ignorar config.env
-!config.env
+# Editors and operating systems
+.DS_Store
+.idea/
+.vscode/
 
-# Notas de proyecto
-Notas.txt
-
-# Archivos de la visión y analisis de imagenes
-agente_openai_con_imagenes.py
-
-# Clave de google_vision_api
-miria.json
+# Temporary files
+*.tmp
+*.bak
