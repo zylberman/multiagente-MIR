@@ -1,6 +1,6 @@
 import unittest
 
-from mir_multiagent.models import MirQuestion, QuestionOption
+from mir_multiagent.models import AgentResult, MirQuestion, QuestionAsset, QuestionOption
 
 
 class MirQuestionTests(unittest.TestCase):
@@ -27,6 +27,27 @@ class MirQuestionTests(unittest.TestCase):
                 stem="Incomplete",
                 options=(QuestionOption("1", "Only option"),),
             )
+
+    def test_question_asset_contract(self) -> None:
+        asset = QuestionAsset(
+            asset_id="asset-1",
+            source_page=4,
+            local_path="ignored/local.png",
+            association_confidence=0.5,
+        )
+        self.assertEqual(asset.asset_type, "image")
+
+    def test_failed_agent_result_has_no_medical_content(self) -> None:
+        result = AgentResult(
+            agent_name="clinical",
+            status="failed",
+            content="",
+            error_type="TimeoutError",
+            model="test-model",
+            provider="test-provider",
+        )
+        self.assertEqual(result.status, "failed")
+        self.assertEqual(result.content, "")
 
 
 if __name__ == "__main__":

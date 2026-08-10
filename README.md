@@ -23,7 +23,8 @@ formal evaluation belong to P1.
 ```text
 Local PDF
   -> page/two-column extraction
-  -> tolerant MIR question parser
+  -> fault-tolerant parser + extraction report
+  -> preliminary embedded-image assets
   -> MirQuestion contract
   -> answer -> pharmacology -> clinical -> terminology
   -> mnemonic (receives prior analyses)
@@ -34,7 +35,7 @@ Local PDF
 Key directories:
 
 - `src/mir_multiagent/`: contracts, ingestion, providers, agents and orchestration.
-- `config/prompts.json`: role prompts, without credentials.
+- `src/mir_multiagent/resources/prompts.json`: packaged role prompts, without credentials.
 - `data/input/`: ignored local PDFs.
 - `data/images/`: ignored extracted or associated images.
 - `outputs/`: ignored generated results.
@@ -123,19 +124,27 @@ external APIs or include MIR source material.
 - Typed contracts for questions, assets, agent outputs and final explanations.
 - Environment-only credentials and provider/model selection.
 - Local-only PDF, image and output directories.
-- Conservative parser with unusual-format and missing-image warnings.
+- Fault-tolerant parser that reports and discards ambiguous blocks without aborting
+  later questions.
+- Preliminary embedded-image extraction through the `QuestionAsset` contract.
 - Explicit five-role multi-agent flow with traceable results.
+- Structured agent states (`success`, `failed`, `skipped`) and final states
+  (`complete`, `partial`, `failed`).
 - Minimal end-to-end CLI and synthetic smoke tests.
 
 ## Current limitations
 
-- PDF layouts vary; the two-column parser is intentionally basic and has no OCR.
-- Image references are detected, but automatic image-to-question association is not
-  complete. Missing assets produce warnings.
+- PDF layouts vary; parsing remains heuristic, malformed questions may be discarded
+  with warnings, and the two-column extractor has no OCR.
+- Embedded images can be extracted as `QuestionAsset` records. Association currently
+  uses only a same-page heuristic and may remain unresolved with a warning.
+- Image bytes are not sent to LLM providers; multimodal inference is not implemented.
 - Provider responses are free text; validated structured LLM output is deferred.
 - The answer option and confidence remain unset unless a future provider adapter
   returns validated structured data.
 - There is no RAG, citation verification, benchmark or clinical accuracy claim.
+- Answer-agent failure stops the remaining roles and returns `failed`. A secondary
+  failure is excluded from later clinical context and returns `partial`.
 - A historical credential and source PDFs existed in Git history. See
   `docs/SECURITY.md`; history must be sanitized before publication.
 

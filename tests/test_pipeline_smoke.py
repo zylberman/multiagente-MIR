@@ -20,6 +20,7 @@ class PipelineSmokeTests(unittest.TestCase):
             },
         )
         final = MultiAgentPipeline.create(settings, MockProvider()).run(question)
+        self.assertEqual(final.status, "complete")
         self.assertEqual(len(final.agent_results), 5)
         self.assertIn("SMOKE_TEST_ONLY", final.final_answer_text)
 

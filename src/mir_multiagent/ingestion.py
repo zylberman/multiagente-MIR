@@ -72,6 +72,7 @@ def parse_questions_with_report(
     markers = list(MARKER.finditer(text))
     runs = _find_option_runs(markers)
     consumed_question_markers: set[int] = set()
+    consumed_markers: set[int] = set()
 
     for run_start, run_end in runs:
         header_index = run_start - 1
@@ -179,6 +180,8 @@ def parse_questions_with_report(
                 )
             )
             consumed_question_markers.add(header_index)
+            consumed_markers.add(header_index)
+            consumed_markers.update(range(run_start, run_end + 1))
         except ValueError as exc:
             result.discarded_questions += 1
             result.issues.append(
@@ -188,6 +191,22 @@ def parse_questions_with_report(
                     source_page=source_page,
                     question_id=question_id,
                     severity="error",
+                )
+            )
+    for marker_index, marker in enumerate(markers[:-1]):
+        next_label = markers[marker_index + 1].group(1).upper()
+        if (
+            marker_index not in consumed_markers
+            and marker.group(1).isdigit()
+            and next_label in {"1", "A"}
+        ):
+            result.discarded_questions += 1
+            result.issues.append(
+                ExtractionIssue(
+                    code="unparsed-question-block",
+                    message="Possible question block did not contain an unambiguous option sequence",
+                    source_page=source_page,
+                    question_id=marker.group(1),
                 )
             )
     return result
