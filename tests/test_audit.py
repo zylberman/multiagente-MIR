@@ -74,6 +74,18 @@ class ImageReconciliationTests(unittest.TestCase):
         self.assertEqual(report.unassociated_assets, ("asset-2",))
         self.assertIn("IMAGE_COUNT_OUTSIDE_EXPECTED_RANGE", report.warnings)
 
+    def test_low_confidence_association_is_counted_separately(self) -> None:
+        asset = QuestionAsset(
+            asset_id="asset-low", source_page=1, local_path="asset-low.png",
+            association_confidence=0.4,
+        )
+        ingestion = IngestionResult(
+            questions=[question(1, image=True, assets=(asset,))], assets=[asset]
+        )
+        report = reconcile_images(ingestion)
+        self.assertEqual(report.high_confidence_associations, 0)
+        self.assertEqual(report.low_confidence_associations, 1)
+
 
 if __name__ == "__main__":
     unittest.main()
