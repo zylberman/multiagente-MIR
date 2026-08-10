@@ -65,7 +65,7 @@ class MirQuestion:
         option_ids = [option.option_id for option in self.options]
         if len(option_ids) != len(set(option_ids)):
             raise ValueError("Question option ids must be unique")
-        if self.has_associated_image and not self.assets and "associated image not found" not in self.warnings:
+        if self.has_associated_image and not self.assets and not self.warnings:
             raise ValueError("Questions with an unresolved image require an explicit warning")
 
     def to_dict(self) -> dict[str, Any]:

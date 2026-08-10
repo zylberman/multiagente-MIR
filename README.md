@@ -110,6 +110,23 @@ python -m mir_multiagent data/input/questionnaire.pdf \
   --output outputs/question-1.json
 ```
 
+### Validate a complete MIR exam without an LLM
+
+General PDFs do not require a fixed number of questions. When the input is known to
+be a complete MIR exam, run an explicit structural audit:
+
+```bash
+python -m mir_multiagent validate-extraction \
+  data/input/exam.pdf \
+  --expected-questions 210 \
+  --output outputs/extraction-audit.json
+```
+
+This command never constructs an LLM provider or runs an agent. It reports recovered,
+missing, duplicate, unexpected and unnumbered questions, plus image extraction and
+association statistics. `--debug-extraction` prints only short previews, fingerprints
+and provenance for ambiguous blocks; it does not print the complete exam.
+
 ## Tests
 
 ```bash
@@ -127,6 +144,8 @@ external APIs or include MIR source material.
 - Fault-tolerant parser that reports and discards ambiguous blocks without aborting
   later questions.
 - Preliminary embedded-image extraction through the `QuestionAsset` contract.
+- Explicit complete-exam reconciliation using original source question numbers.
+- Cross-column and conservative cross-page reconstruction with page provenance.
 - Explicit five-role multi-agent flow with traceable results.
 - Structured agent states (`success`, `failed`, `skipped`) and final states
   (`complete`, `partial`, `failed`).
@@ -137,7 +156,8 @@ external APIs or include MIR source material.
 - PDF layouts vary; parsing remains heuristic, malformed questions may be discarded
   with warnings, and the two-column extractor has no OCR.
 - Embedded images can be extracted as `QuestionAsset` records. Association currently
-  uses only a same-page heuristic and may remain unresolved with a warning.
+  uses explicit referenced image numbers when present. Unnumbered references may use
+  a unique same-page asset at low confidence or remain unresolved with a warning.
 - Image bytes are not sent to LLM providers; multimodal inference is not implemented.
 - Provider responses are free text; validated structured LLM output is deferred.
 - The answer option and confidence remain unset unless a future provider adapter

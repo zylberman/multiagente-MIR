@@ -253,7 +253,7 @@ def _associate_assets(
             return (replace(exact[0], association_confidence=1.0),), ()
         if len(exact) > 1:
             return (), ("multiple assets match referenced image number",)
-        return (), ("referenced image number has no extracted asset",)
+        return (), ("associated image not found", "referenced image number has no extracted asset")
     nearby = tuple(asset for asset in assets if asset.source_page in source_pages)
     if len(nearby) == 1:
         return (replace(nearby[0], association_confidence=0.4,

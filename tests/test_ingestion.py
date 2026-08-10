@@ -2,7 +2,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from mir_multiagent.ingestion import _extract_image_assets, parse_questions, parse_questions_with_report
+from mir_multiagent.ingestion import (
+    SourceSpan,
+    _extract_image_assets,
+    parse_questions,
+    parse_questions_with_report,
+)
 from mir_multiagent.models import MirQuestion, QuestionAsset
 
 
@@ -46,7 +51,7 @@ class IngestionTests(unittest.TestCase):
         result = parse_questions_with_report(text)
         self.assertEqual([question.question_id for question in result.questions], ["2"])
         self.assertGreaterEqual(result.discarded_questions, 1)
-        self.assertTrue(any(issue.code == "unparsed-question-block" for issue in result.issues))
+        self.assertTrue(any(issue.code == "UNRECOGNIZED_LAYOUT" for issue in result.issues))
 
     def test_number_inside_stem_is_not_an_option_marker(self) -> None:
         text = """10. Synthetic patient has 2 findings in prose.
@@ -83,6 +88,7 @@ E. Five
         asset = QuestionAsset(
             asset_id="synthetic-p1-img1",
             source_page=1,
+            source_image_number=1,
             local_path="data/images/synthetic.png",
         )
         question = parse_questions(
@@ -92,7 +98,47 @@ E. Five
         )[0]
         self.assertEqual(len(question.assets), 1)
         self.assertEqual(question.assets[0].asset_id, asset.asset_id)
-        self.assertEqual(question.assets[0].association_confidence, 0.6)
+        self.assertEqual(question.referenced_image_number, 1)
+        self.assertEqual(question.assets[0].association_confidence, 1.0)
+
+    def test_unnumbered_image_reference_remains_separate_without_unique_asset(self) -> None:
+        assets = tuple(
+            QuestionAsset(asset_id=f"a-{number}", source_page=1, source_image_number=number,
+                          local_path=f"image-{number}.png")
+            for number in (1, 2)
+        )
+        question = parse_questions(
+            "1. Véase imagen y seleccione\n1. A\n2. B\n3. C\n4. D\n",
+            source_page=1,
+            assets=assets,
+        )[0]
+        self.assertTrue(question.has_associated_image)
+        self.assertIsNone(question.referenced_image_number)
+        self.assertEqual(question.assets, ())
+
+    def test_question_continued_across_page_preserves_provenance(self) -> None:
+        page_one = "1. Cross-page synthetic question"
+        page_two = "1. A\n2. B\n3. C\n4. D"
+        text = page_one + "\n" + page_two
+        spans = (
+            SourceSpan(0, len(page_one), 1, "right"),
+            SourceSpan(len(page_one) + 1, len(text), 2, "left"),
+        )
+        question = parse_questions_with_report(text, source_spans=spans).questions[0]
+        self.assertEqual(question.source_pages, (1, 2))
+        self.assertIn("QUESTION_CONTINUED_ACROSS_PAGE", question.warnings)
+
+    def test_question_continued_across_columns_preserves_column(self) -> None:
+        left = "1. Cross-column synthetic question"
+        right = "1. A\n2. B\n3. C\n4. D"
+        text = left + "\n" + right
+        spans = (
+            SourceSpan(0, len(left), 1, "left"),
+            SourceSpan(len(left) + 1, len(text), 1, "right"),
+        )
+        question = parse_questions_with_report(text, source_spans=spans).questions[0]
+        self.assertEqual(question.source_column, "left")
+        self.assertEqual(question.source_pages, (1,))
 
     def test_embedded_image_extraction_writes_asset(self) -> None:
         class RenderedImage:
@@ -114,6 +160,7 @@ E. Five
             assets = _extract_image_assets([Page()], Path("synthetic.pdf"), Path(directory), issues)
             self.assertEqual(len(assets), 1)
             self.assertTrue(Path(assets[0].local_path).is_file())
+            self.assertEqual(assets[0].source_image_number, 1)
             self.assertEqual(issues, [])
 
 
