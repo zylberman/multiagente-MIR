@@ -35,6 +35,7 @@ class ExtractionIssue:
     fingerprint: str | None = None
     preview: str | None = None
     option_ids: tuple[str, ...] = ()
+    contains_detected_options: bool = False
 
 
 @dataclass
@@ -83,7 +84,7 @@ def parse_questions_with_report(
     consumed: set[int] = set()
 
     for run_start, run_end in runs:
-        header_index = run_start - 1
+        header_index = _find_header_index(markers, run_start, consumed)
         header = markers[header_index] if header_index >= 0 else None
         page, column = _location_for_offset(
             header.start() if header else markers[run_start].start(), source_spans, source_page
@@ -239,6 +240,23 @@ def _find_option_runs(markers: list[re.Match[str]]) -> list[tuple[int, int]]:
     return runs
 
 
+def _find_header_index(
+    markers: list[re.Match[str]], run_start: int, consumed: set[int]
+) -> int:
+    """Find the nearest numeric header, tolerating isolated option-like lines.
+
+    A consumed marker is a hard boundary, so this cannot reach back into a
+    previously accepted question. The small look-back keeps the recovery
+    conservative while allowing incidental A-E/1-5 lines inside a stem.
+    """
+    for index in range(run_start - 1, max(-1, run_start - 4), -1):
+        if index in consumed:
+            break
+        if markers[index].group(1).isdigit():
+            return index
+    return -1
+
+
 def _associate_assets(
     image_match: re.Match[str] | None,
     referenced_number: int | None,
@@ -366,4 +384,5 @@ def _issue(
         fingerprint=hashlib.sha256(fragment.encode("utf-8")).hexdigest()[:12],
         preview=fragment[:32] or None,
         option_ids=option_ids,
+        contains_detected_options=bool(option_ids),
     )

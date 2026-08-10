@@ -64,6 +64,25 @@ class IngestionTests(unittest.TestCase):
         self.assertEqual(question.question_id, "10")
         self.assertIn("2 findings", question.stem)
 
+    def test_isolated_option_like_line_does_not_create_false_question(self) -> None:
+        text = """1. Synthetic stem
+1. Alpha
+2. Beta
+3. Gamma
+4. Delta
+
+2. Another stem with an isolated marker-like line
+A. This line alone is not a complete option run
+Continuation of the stem
+1. One
+2. Two
+3. Three
+4. Four
+"""
+        questions = parse_questions(text)
+        self.assertEqual([question.source_question_number for question in questions], [1, 2])
+        self.assertIn("isolated marker-like line", questions[1].stem)
+
     def test_five_numeric_options(self) -> None:
         text = """20. Numeric five-option question
 1. One
@@ -115,6 +134,19 @@ E. Five
         self.assertTrue(question.has_associated_image)
         self.assertIsNone(question.referenced_image_number)
         self.assertEqual(question.assets, ())
+
+    def test_unnumbered_image_reference_uses_unique_same_page_asset_at_low_confidence(self) -> None:
+        asset = QuestionAsset(
+            asset_id="only-page-asset", source_page=3, source_image_number=9,
+            local_path="only-page-asset.png",
+        )
+        question = parse_questions(
+            "1. Véase imagen y seleccione\n1. A\n2. B\n3. C\n4. D\n",
+            source_page=3,
+            assets=(asset,),
+        )[0]
+        self.assertEqual(question.assets[0].association_confidence, 0.4)
+        self.assertIn("image association is low-confidence", question.warnings)
 
     def test_question_continued_across_page_preserves_provenance(self) -> None:
         page_one = "1. Cross-page synthetic question"
