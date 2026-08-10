@@ -22,6 +22,7 @@ class QuestionAsset:
     asset_id: str
     asset_type: str = "image"
     source_page: int | None = None
+    source_image_number: int | None = None
     local_path: str = ""
     extraction_method: str = "pdf-embedded-image"
     association_confidence: float | None = None
@@ -42,9 +43,13 @@ class MirQuestion:
     question_id: str
     stem: str
     options: tuple[QuestionOption, ...]
+    source_question_number: int | None = None
     source_page: int | None = None
+    source_pages: tuple[int, ...] = ()
+    source_column: str | None = None
     source_pdf: str | None = None
     has_associated_image: bool = False
+    referenced_image_number: int | None = None
     assets: tuple[QuestionAsset, ...] = ()
     raw_extracted_text: str = ""
     warnings: tuple[str, ...] = ()
