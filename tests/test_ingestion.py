@@ -5,6 +5,7 @@ from pathlib import Path
 from mir_multiagent.ingestion import (
     SourceSpan,
     _extract_image_assets,
+    _extract_labeled_image_assets,
     parse_questions,
     parse_questions_with_report,
 )
@@ -223,6 +224,39 @@ E. Five
                 [Path(asset.local_path).name for asset in assets],
                 ["MIR.12.2425.01-imagen-1.png", "MIR.12.2425.01-imagen-2.png"],
             )
+
+    def test_separate_image_pdf_uses_explicit_labels(self) -> None:
+        class RenderedImage:
+            def save(self, path: Path, format: str) -> None:
+                path.write_bytes(b"synthetic-image")
+
+        class CroppedPage:
+            def to_image(self, resolution: int) -> RenderedImage:
+                return RenderedImage()
+
+        class Page:
+            images = [
+                {"x0": 0, "top": 20, "x1": 10, "bottom": 30},
+                {"x0": 0, "top": 40, "x1": 10, "bottom": 50},
+            ]
+
+            def extract_text(self) -> str:
+                return "IMAGEN 7\nIMAGEN 8"
+
+            def crop(self, bbox: tuple[int, int, int, int]) -> CroppedPage:
+                return CroppedPage()
+
+        with tempfile.TemporaryDirectory() as directory:
+            issues = []
+            assets = _extract_labeled_image_assets(
+                [Page()], Path("SmIm06MIR2027.pdf"), Path(directory), issues
+            )
+            self.assertEqual([asset.source_image_number for asset in assets], [7, 8])
+            self.assertEqual(
+                [Path(asset.local_path).name for asset in assets],
+                ["SmIm06MIR2027-imagen-7.png", "SmIm06MIR2027-imagen-8.png"],
+            )
+            self.assertEqual(issues, [])
 
 
 if __name__ == "__main__":

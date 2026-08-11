@@ -20,6 +20,7 @@ def build_run_parser() -> argparse.ArgumentParser:
     parser.add_argument("pdf", type=Path, help="Local MIR questionnaire PDF")
     parser.add_argument("--question-index", type=int, default=0, help="Zero-based parsed question index")
     parser.add_argument("--output", type=Path, help="Optional JSON output path")
+    parser.add_argument("--images-pdf", type=Path, help="Optional separate PDF containing labelled images")
     return parser
 
 
@@ -28,6 +29,7 @@ def build_validation_parser() -> argparse.ArgumentParser:
     parser.add_argument("pdf", type=Path, help="Local complete MIR exam PDF")
     parser.add_argument("--expected-questions", type=int, default=210)
     parser.add_argument("--output", type=Path, help="Optional extraction-audit JSON path")
+    parser.add_argument("--images-pdf", type=Path, help="Optional separate PDF containing labelled images")
     parser.add_argument("--debug-extraction", action="store_true", help="Print only ambiguous block metadata")
     return parser
 
@@ -42,7 +44,7 @@ def main(argv: list[str] | None = None) -> int:
 def _validate_extraction(args: argparse.Namespace) -> int:
     try:
         image_dir = Path("data/images") / args.pdf.stem
-        ingestion = ingest_pdf(args.pdf, image_output_dir=image_dir)
+        ingestion = ingest_pdf(args.pdf, image_output_dir=image_dir, images_pdf_path=args.images_pdf)
         audit = build_extraction_audit(ingestion, args.pdf.name, args.expected_questions)
         questions = audit.questions
         images = audit.images
@@ -82,7 +84,7 @@ def _run_agents(args: argparse.Namespace) -> int:
             format="%(levelname)s %(name)s: %(message)s",
         )
         image_dir = Path("data/images") / args.pdf.stem
-        ingestion = ingest_pdf(args.pdf, image_output_dir=image_dir)
+        ingestion = ingest_pdf(args.pdf, image_output_dir=image_dir, images_pdf_path=args.images_pdf)
         questions = ingestion.questions
         logging.info(
             "Ingestion completed: questions=%d discarded=%d warnings=%d assets=%d",

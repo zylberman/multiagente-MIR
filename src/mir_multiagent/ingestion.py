@@ -189,7 +189,11 @@ def extract_questions_from_pdf(pdf_path: str | Path) -> list[MirQuestion]:
     return ingest_pdf(pdf_path).questions
 
 
-def ingest_pdf(pdf_path: str | Path, image_output_dir: str | Path | None = None) -> IngestionResult:
+def ingest_pdf(
+    pdf_path: str | Path,
+    image_output_dir: str | Path | None = None,
+    images_pdf_path: str | Path | None = None,
+) -> IngestionResult:
     """Parse one continuous left→right, page→page stream and preserve provenance."""
     path = Path(pdf_path)
     if not path.is_file():
@@ -204,8 +208,21 @@ def ingest_pdf(pdf_path: str | Path, image_output_dir: str | Path | None = None)
     result = IngestionResult()
     output_dir = Path(image_output_dir) if image_output_dir else None
     with pdfplumber.open(path) as pdf:
-        result.assets.extend(_extract_image_assets(pdf.pages, path, output_dir, result.issues))
+        if images_pdf_path is None:
+            result.assets.extend(_extract_image_assets(pdf.pages, path, output_dir, result.issues))
         document_text, spans = _build_document_stream(pdf.pages)
+    if images_pdf_path is not None:
+        images_path = Path(images_pdf_path)
+        if not images_path.is_file():
+            raise FileNotFoundError(f"Images PDF not found: {images_path}")
+        if images_path.suffix.lower() != ".pdf":
+            raise ValueError(f"Expected an images PDF input, got: {images_path.name}")
+        with pdfplumber.open(images_path) as images_pdf:
+            result.assets.extend(
+                _extract_labeled_image_assets(
+                    images_pdf.pages, images_path, output_dir, result.issues
+                )
+            )
     parsed = parse_questions_with_report(
         document_text, source_pdf=path, assets=tuple(result.assets), source_spans=spans
     )
@@ -313,6 +330,69 @@ def _extract_image_assets(
                     local_path=str(local_path),
                     warnings=tuple(warnings),
                     metadata={"source_pdf": source_pdf.name, "page_image_index": image_index},
+                )
+            )
+    return assets
+
+
+def _extract_labeled_image_assets(
+    pages: list[Any], source_pdf: Path, output_dir: Path | None,
+    issues: list[ExtractionIssue],
+) -> list[QuestionAsset]:
+    """Extract assets from a separate sheet whose images are labelled IMAGEN N."""
+    assets: list[QuestionAsset] = []
+    if output_dir:
+        output_dir.mkdir(parents=True, exist_ok=True)
+    seen_numbers: set[int] = set()
+    label_pattern = re.compile(r"\bIMAGEN\s+(\d{1,3})\b", re.IGNORECASE)
+    for page_number, page in enumerate(pages, start=1):
+        labels = [int(value) for value in label_pattern.findall(page.extract_text() or "")]
+        images = sorted(page.images, key=lambda image: (image["top"], image["x0"]))
+        if not labels:
+            continue
+        if len(labels) != len(images):
+            issues.append(
+                ExtractionIssue(
+                    "IMAGE_LABEL_COUNT_MISMATCH",
+                    f"Page has {len(labels)} image labels and {len(images)} embedded images",
+                    source_page=page_number,
+                    severity="warning",
+                )
+            )
+            continue
+        for image_number, image in zip(labels, images):
+            if image_number in seen_numbers:
+                issues.append(
+                    ExtractionIssue(
+                        "DUPLICATE_IMAGE_NUMBER", f"Duplicate image label {image_number}",
+                        source_page=page_number, severity="warning",
+                    )
+                )
+                continue
+            seen_numbers.add(image_number)
+            asset_id = f"{source_pdf.stem}-imagen-{image_number}"
+            local_path = (output_dir / f"{asset_id}.png") if output_dir else Path(f"{asset_id}.png")
+            warnings: list[str] = []
+            if output_dir:
+                try:
+                    bbox = (image["x0"], image["top"], image["x1"], image["bottom"])
+                    page.crop(bbox).to_image(resolution=150).save(local_path, format="PNG")
+                except Exception as exc:
+                    warnings.append(f"image extraction failed: {type(exc).__name__}")
+                    issues.append(
+                        ExtractionIssue(
+                            "IMAGE_EXTRACTION_FAILED", f"Asset {asset_id} was not written",
+                            page_number, severity="warning",
+                        )
+                    )
+            assets.append(
+                QuestionAsset(
+                    asset_id=asset_id,
+                    source_page=page_number,
+                    source_image_number=image_number,
+                    local_path=str(local_path),
+                    warnings=tuple(warnings),
+                    metadata={"source_pdf": source_pdf.name, "label": f"IMAGEN {image_number}"},
                 )
             )
     return assets

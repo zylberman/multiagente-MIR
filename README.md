@@ -127,6 +127,19 @@ missing, duplicate, unexpected and unnumbered questions, plus image extraction a
 association statistics. `--debug-extraction` prints only short previews, fingerprints
 and provenance for ambiguous blocks; it does not print the complete exam.
 
+If the questionnaire and its labelled image sheets are separate PDFs, pass both:
+
+```bash
+python -m mir_multiagent validate-extraction \
+  data/input/questions.pdf \
+  --images-pdf data/input/images.pdf \
+  --expected-questions 210
+```
+
+Only the first PDF is parsed as questions. Assets from the second PDF are extracted
+from explicit `IMAGEN N` labels and named `<images-pdf>-imagen-N.png`; labels and
+questions remain unassociated unless the questionnaire provides structural evidence.
+
 ## Tests
 
 ```bash
