@@ -291,7 +291,10 @@ def _extract_image_assets(
     for page_number, page in enumerate(pages, start=1):
         for image_index, image in enumerate(page.images, start=1):
             image_number += 1
-            asset_id = f"{source_pdf.stem}-p{page_number}-img{image_index}"
+            # MIR image labels are document-wide ("Imagen 1", "Imagen 2", ...).
+            # Keep the complete PDF identifier in the filename so extracted
+            # assets remain traceable without leaking page-layout internals.
+            asset_id = f"{source_pdf.stem}-imagen-{image_number}"
             local_path = (output_dir / f"{asset_id}.png") if output_dir else Path(f"{asset_id}.png")
             warnings: list[str] = []
             if output_dir:

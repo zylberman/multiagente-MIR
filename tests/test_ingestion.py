@@ -192,8 +192,37 @@ E. Five
             assets = _extract_image_assets([Page()], Path("synthetic.pdf"), Path(directory), issues)
             self.assertEqual(len(assets), 1)
             self.assertTrue(Path(assets[0].local_path).is_file())
+            self.assertEqual(Path(assets[0].local_path).name, "synthetic-imagen-1.png")
+            self.assertEqual(assets[0].asset_id, "synthetic-imagen-1")
             self.assertEqual(assets[0].source_image_number, 1)
             self.assertEqual(issues, [])
+
+    def test_asset_names_keep_complete_mir_pdf_number(self) -> None:
+        class RenderedImage:
+            def save(self, path: Path, format: str) -> None:
+                path.write_bytes(b"synthetic-image")
+
+        class CroppedPage:
+            def to_image(self, resolution: int) -> RenderedImage:
+                return RenderedImage()
+
+        class Page:
+            images = [
+                {"x0": 0, "top": 0, "x1": 10, "bottom": 10},
+                {"x0": 10, "top": 0, "x1": 20, "bottom": 10},
+            ]
+
+            def crop(self, bbox: tuple[int, int, int, int]) -> CroppedPage:
+                return CroppedPage()
+
+        with tempfile.TemporaryDirectory() as directory:
+            assets = _extract_image_assets(
+                [Page()], Path("MIR.12.2425.01.pdf"), Path(directory), []
+            )
+            self.assertEqual(
+                [Path(asset.local_path).name for asset in assets],
+                ["MIR.12.2425.01-imagen-1.png", "MIR.12.2425.01-imagen-2.png"],
+            )
 
 
 if __name__ == "__main__":
