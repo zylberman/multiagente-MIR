@@ -54,6 +54,44 @@ class ValidationCliTests(unittest.TestCase):
         self.assertIn("reason=QUESTION_BOUNDARY_FAILURE", output)
         self.assertNotIn("Synthetic diagnostic", output)
 
+    def test_analyze_question_selects_source_number_and_writes_structured_output(self) -> None:
+        question = MirQuestion(
+            question_id="28", source_question_number=28, stem="Synthetic question",
+            options=tuple(QuestionOption(str(i), f"Option {i}") for i in range(1, 5)),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "question-28.json"
+            with patch("mir_multiagent.cli.ingest_pdf", return_value=IngestionResult(questions=[question])):
+                code = main([
+                    "analyze-question", "synthetic.pdf", "--question-number", "28",
+                    "--output", str(output),
+                ])
+            data = json.loads(output.read_text())
+        self.assertEqual(code, 0)
+        self.assertEqual(data["question_number"], 28)
+        self.assertEqual(data["status"], "complete")
+        self.assertEqual(len(data["option_analysis"]), 4)
+
+    def test_official_key_preserves_predicted_and_official_status_separately(self) -> None:
+        question = MirQuestion(
+            question_id="9", source_question_number=9, stem="Synthetic question",
+            options=tuple(QuestionOption(str(i), f"Option {i}") for i in range(1, 5)),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            key = Path(directory) / "official.json"
+            key.write_text(json.dumps({"9": {"official_answer": "2", "annulled": True}}))
+            output = Path(directory) / "question-9.json"
+            with patch("mir_multiagent.cli.ingest_pdf", return_value=IngestionResult(questions=[question])):
+                code = main([
+                    "analyze-question", "synthetic.pdf", "--question-number", "9",
+                    "--official-key", str(key), "--output", str(output),
+                ])
+            data = json.loads(output.read_text())
+        self.assertEqual(code, 0)
+        self.assertEqual(data["answer"]["predicted_correct_option"], "1")
+        self.assertEqual(data["answer"]["official_correct_option"], "2")
+        self.assertTrue(data["review"]["officially_annulled"])
+
 
 if __name__ == "__main__":
     unittest.main()

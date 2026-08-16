@@ -15,8 +15,9 @@ source metadata and optional image references. Five explicit roles then contribu
 4. **Terminology agent** — defines the necessary medical concepts.
 5. **Mnemonic agent** — builds a visual analogy from the previous analyses.
 
-P0 uses a simple sequential workflow. Cross-agent debate, evidence retrieval and
-formal evaluation belong to P1.
+P0 preserves a legacy sequential smoke workflow. P1 adds structured one-question
+analysis with an independent reviewer; evidence retrieval and formal evaluation are
+still out of scope.
 
 ## Architecture
 
@@ -30,6 +31,20 @@ Local PDF
   -> mnemonic (receives prior analyses)
   -> FinalExplanation contract
   -> JSON output
+```
+
+P1 one-question analysis:
+
+```text
+Validated MirQuestion + trusted image bytes (when required)
+  -> QuestionPackage input gate
+  -> independent AnswerResolver + IndependentReviewer
+  -> clinical / pharmacology / terminology / scales / option analysis
+  -> structural agreement check
+  -> adjudicator only on disagreement
+  -> 3-7 high-yield points
+  -> absurd visual mnemonic using accepted facts only
+  -> FinalStudyExplanation JSON
 ```
 
 Key directories:
@@ -110,6 +125,48 @@ python -m mir_multiagent data/input/questionnaire.pdf \
   --output outputs/question-1.json
 ```
 
+### Analyze one question into structured study output
+
+Select by original MIR number rather than parser index:
+
+```bash
+MIR_LLM_PROVIDER=mock python -m mir_multiagent analyze-question \
+  data/input/exam.pdf \
+  --question-number 28 \
+  --output outputs/question-28.json
+```
+
+For separate image sheets:
+
+```bash
+MIR_LLM_PROVIDER=mock python -m mir_multiagent analyze-question \
+  data/input/questions.pdf \
+  --images-pdf data/input/images.pdf \
+  --question-number 8 \
+  --output outputs/question-8.json
+```
+
+The image input gate reads the actual asset bytes. A required missing image returns
+`missing_required_image`; low-confidence association returns `needs_asset_review`;
+and a text-only provider returns `model_does_not_support_images`. No silent
+text-only fallback is performed.
+
+An optional local official key may be supplied:
+
+```json
+{
+  "28": {"official_answer": "3", "annulled": false}
+}
+```
+
+```bash
+python -m mir_multiagent analyze-question data/input/exam.pdf \
+  --question-number 28 --official-key answers.json
+```
+
+Predicted and official answers remain separate. A model may flag a question as
+potentially invalid, but only supplied local official evidence can mark it annulled.
+
 ### Validate a complete MIR exam without an LLM
 
 General PDFs do not require a fixed number of questions. When the input is known to
@@ -149,7 +206,7 @@ python -m unittest discover -s tests -v
 The tests use synthetic text and the deterministic smoke backend. They do not call
 external APIs or include MIR source material.
 
-## P0 scope completed
+## Extraction and analysis scope completed
 
 - Typed contracts for questions, assets, agent outputs and final explanations.
 - Environment-only credentials and provider/model selection.
@@ -159,6 +216,11 @@ external APIs or include MIR source material.
 - Preliminary embedded-image extraction through the `QuestionAsset` contract.
 - Explicit complete-exam reconciliation using original source question numbers.
 - Cross-column and conservative cross-page reconstruction with page provenance.
+- Multimodal `QuestionPackage` with real image bytes and conservative asset gates.
+- Typed resolver, per-option analysis, clinical, pharmacology, terminology,
+  scales/formulas, high-yield and mnemonic outputs.
+- Independent pre-comparison reviewer and conditional disagreement adjudication.
+- Structured one-question `analyze-question` CLI with a deterministic offline mock.
 - Explicit five-role multi-agent flow with traceable results.
 - Structured agent states (`success`, `failed`, `skipped`) and final states
   (`complete`, `partial`, `failed`).
@@ -171,30 +233,30 @@ external APIs or include MIR source material.
 - Embedded images can be extracted as `QuestionAsset` records. Association currently
   uses explicit referenced image numbers when present. Unnumbered references may use
   a unique same-page asset at low confidence or remain unresolved with a warning.
-- Image bytes are not sent to LLM providers; multimodal inference is not implemented.
-- Provider responses are free text; validated structured LLM output is deferred.
-- The answer option and confidence remain unset unless a future provider adapter
-  returns validated structured data.
+- Vision support depends on the configured provider and model. Correct asset
+  association must be established before image analysis.
+- External model JSON is validated after generation; malformed output produces an
+  explicit failed or partial result rather than guessed fields.
+- P1 analyzes one question at a time; full-exam batch execution is intentionally absent.
 - There is no RAG, citation verification, benchmark or clinical accuracy claim.
 - Answer-agent failure stops the remaining roles and returns `failed`. A secondary
   failure is excluded from later clinical context and returns `partial`.
 - A historical credential and source PDFs existed in Git history. See
   `docs/SECURITY.md`; history must be sanitized before publication.
 
-## P1 candidates
+## Future candidates
 
-- Robust layout/OCR and image association.
-- Validated structured provider responses.
+- Robust layout/OCR and additional image-association formats.
 - Evidence retrieval from legally usable medical sources.
-- Agent verification and clearly defined disagreement handling.
 - Reproducible single-agent versus multi-agent evaluation.
 
 ## Source-material and medical disclaimer
 
 Do not commit copyrighted questionnaires, answer keys, extracted images or generated
-derivative collections. Verify permissions for every source independently. Outputs
-are educational and may be incorrect; they must not be used for diagnosis or patient
-care.
+derivative collections. Verify permissions for every source independently. This is
+AI-assisted MIR question analysis for structured education, not an official answer
+key or clinically validated solver. Outputs may be incorrect and must not be used for
+diagnosis or patient care. Independent model agreement is not proof of correctness.
 
 ## License
 
